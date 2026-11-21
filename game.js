@@ -123,6 +123,19 @@
     };
   })();
 
+  // online session state (see the Network section below)
+  const net = { role: null, peer: null, conn: null, code: '', sendT: 0, lastRecv: 0, sfxQ: [], bannerId: -1 };
+  // sounds the host plays are forwarded to the guest
+  const SFX_FX = ['bounce', 'rim', 'board', 'swish', 'dunk', 'cheer', 'whistle', 'buzzer', 'pass', 'steal', 'block'];
+  const sfxRaw = {};
+  for (const k of SFX_FX) {
+    sfxRaw[k] = sfx[k];
+    sfx[k] = (...a) => {
+      sfxRaw[k](...a);
+      if (net.role === 'host' && net.sfxQ.length < 40) net.sfxQ.push([k, ...a]);
+    };
+  }
+
   // =====================================================================
   // Input
   // =====================================================================
@@ -139,8 +152,17 @@
     isDown(a) { return this.down.has(a); },
     hit(a) { return this.pressed.has(a); },
     up(a) { return this.released.has(a); },
-    press(a) { if (!this.down.has(a)) { this.down.add(a); this.pressed.add(a); } },
-    release(a) { if (this.down.has(a)) { this.down.delete(a); this.released.add(a); } },
+    pressT: 0, held: null,
+    press(a) {
+      if (this.down.has(a)) return;
+      this.down.add(a); this.pressed.add(a);
+      if (a === 'shoot') this.pressT = performance.now();
+    },
+    release(a) {
+      if (!this.down.has(a)) return;
+      this.down.delete(a); this.released.add(a);
+      if (a === 'shoot') this.held = (performance.now() - this.pressT) / 1000;
+    },
     axis() {
       let x = (this.isDown('right') ? 1 : 0) - (this.isDown('left') ? 1 : 0);
       let z = (this.isDown('down') ? 1 : 0) - (this.isDown('up') ? 1 : 0);
@@ -151,7 +173,9 @@
     },
     endFrame() { this.pressed.clear(); this.released.clear(); },
   };
+  const typing = (e) => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
   window.addEventListener('keydown', (e) => {
+    if (typing(e)) return;
     const a = KEYMAP[e.code];
     if (!a) return;
     e.preventDefault();
@@ -159,10 +183,23 @@
     if (!e.repeat) input.press(a);
   });
   window.addEventListener('keyup', (e) => {
+    if (typing(e)) return;
     const a = KEYMAP[e.code];
     if (a) { e.preventDefault(); input.release(a); }
   });
   window.addEventListener('blur', () => { for (const a of [...input.down]) input.release(a); });
+
+  // the online opponent's controls, fed by network messages (host side)
+  const NET_ACTS = new Set(['up', 'down', 'left', 'right', 'sprint', 'shoot', 'pass', 'switch']);
+  const remoteInput = {
+    ax: 0, az: 0, down: new Set(), pressed: new Set(), released: new Set(), held: null,
+    isDown(a) { return this.down.has(a); },
+    hit(a) { return this.pressed.has(a); },
+    up(a) { return this.released.has(a); },
+    axis() { return { x: this.ax, z: this.az, m: Math.min(1, hyp(this.ax, this.az)) }; },
+    endFrame() { this.pressed.clear(); this.released.clear(); },
+    reset() { this.ax = this.az = 0; this.down.clear(); this.endFrame(); this.held = null; },
+  };
 
   // touch controls
   const touchEl = document.getElementById('touch');
@@ -258,10 +295,13 @@
     cheer: 0, shake: 0, time: 0, playTime: 0,
     stats: null,
     winner: -1,
+    humans: [false, false], localTeam: 0, online: false, bannerId: 0,
   };
   let players = [];
   let teams = [[], []];
-  let controlled = null;
+  const ctrl = [null, null]; // the player each human team is steering (null = CPU team)
+  const isHuman = (p) => !!p && ctrl[p.team] === p;
+  const cpuTeam = (t) => !game.demo && !game.humans[t];
   const chasers = [null, null];
   const ball = {
     x: MID_X, y: 1, z: MID_Z, vx: 0, vy: 0, vz: 0, rot: 0,
@@ -281,15 +321,18 @@
     };
   }
   const reachOf = (p) => p.height * 1.22 + p.y + (p.y > 0.05 ? 0.15 : 0);
-  const skillOf = (p) => (game.demo ? 0.74 : p.team === 1 ? DIFFS[game.diff].oppSkill : 0.76);
+  const skillOf = (p) => (game.demo ? 0.74 : cpuTeam(p.team) ? DIFFS[game.diff].oppSkill : 0.76);
 
   function newStats() {
     const t = () => ({ fgm: 0, fga: 0, tpm: 0, tpa: 0, dunks: 0, blocks: 0, steals: 0 });
     return [t(), t()];
   }
 
-  function newGame(demo) {
+  function newGame(demo, opts = {}) {
     game.demo = demo;
+    game.humans = demo ? [false, false] : (opts.humans || [true, false]);
+    game.localTeam = opts.localTeam || 0;
+    game.online = !!opts.online;
     game.mode = demo ? 'menu' : 'play';
     game.score = [0, 0];
     game.quarter = 1;
@@ -306,7 +349,7 @@
     players = [];
     for (let t = 0; t < 2; t++) for (let i = 0; i < 3; i++) players.push(makePlayer(t, i));
     teams = [players.filter((p) => p.team === 0), players.filter((p) => p.team === 1)];
-    controlled = demo ? null : teams[0][2];
+    for (let t = 0; t < 2; t++) ctrl[t] = game.humans[t] ? teams[t][2] : null;
     setupJumpBall();
     if (!demo) banner('跳球！', '按 D / 空白鍵 跳起爭球', '#ffd54a', 1.8);
   }
@@ -340,6 +383,7 @@
   // =====================================================================
   function banner(text, sub, color = '#fff', dur = 1.7) {
     game.banner = { text, sub, color, t: 0, dur };
+    game.bannerId++;
   }
   function floatText(text, x, y, z, color = '#fff', size = 26) {
     game.texts.push({ text, x, y, z, color, size, t: 0 });
@@ -355,7 +399,7 @@
     ball.touchedRim = false; ball.lastTeam = p.team; ball.ignore = null;
     game.possession = p.team;
     p.plan = Math.random() < (p.idx === 2 ? 0.25 : 0.55) ? 'three' : 'drive'; p.planT = 0; p.aiT = rand(0.1, 0.3);
-    if (!game.demo && p.team === 0) controlled = p;
+    if (game.humans[p.team]) ctrl[p.team] = p;
     return wasShot;
   }
 
@@ -417,9 +461,9 @@
 
   function reactDefenders(shooter, range, isDunk) {
     for (const o of teams[1 - shooter.team]) {
-      if (o === controlled || o.state !== 'idle' || o.y > 0) continue;
+      if (isHuman(o) || o.state !== 'idle' || o.y > 0) continue;
       const d = hyp(o.x - shooter.x, o.z - shooter.z);
-      const prob = game.demo ? 0.5 : o.team === 1 ? DIFFS[game.diff].block : 0.5;
+      const prob = game.demo ? 0.5 : cpuTeam(o.team) ? DIFFS[game.diff].block : 0.5;
       if (d < range && Math.random() < prob) o.jumpAt = isDunk ? rand(0.02, 0.15) : rand(0.04, 0.2);
     }
   }
@@ -427,7 +471,7 @@
   function startShot(p) {
     if (ball.holder !== p || p.state !== 'idle' || p.y > 0) return;
     p.state = 'shoot'; p.stateT = 0; p.vy = SHOT_VY; p.vx *= 0.25; p.vz *= 0.25;
-    p.userShot = p === controlled;
+    p.userShot = isHuman(p);
     const sk = skillOf(p);
     p.releaseAt = APEX + gauss() * (0.03 + 0.12 * (1 - sk));
     const hp = HOOPS[attackHoop(p.team)];
@@ -458,7 +502,7 @@
     ball.shot = { team: p.team, hoop: hi, points: three ? 3 : 2, shooter: p, dunk: false, scored: false };
     ball.ignore = p; ball.ignoreT = 0.5; ball.lastTeam = p.team; ball.touchedRim = false; ball.pass = null;
     p.state = 'post'; p.follow = 0.6;
-    if (p === controlled) {
+    if (isHuman(p)) {
       const label = q >= 0.999 ? ['完美出手！', '#5dff7a'] : q > 0.65 ? ['不錯', '#c7ff7a']
         : p.stateT < APEX ? ['太早', '#ffb14a'] : ['太晚', '#ffb14a'];
       floatText(label[0], p.x, p.y + p.height + 0.7, p.z, label[1], 22);
@@ -468,7 +512,7 @@
       const dd = hyp(o.x - p.x, o.z - p.z);
       const dot = ((o.x - p.x) * (hp.x - p.x) + (o.z - p.z) * (hp.z - p.z)) / ((dd || 1) * (d || 1));
       if (dd < 1.05 && o.y > 0.2 && dot > -0.3 && reachOf(o) >= ry - 0.15) {
-        const chance = o === controlled ? 0.7 : 0.55;
+        const chance = isHuman(o) ? 0.7 : 0.55;
         if (Math.random() < chance) { blockBall(o, hp); break; }
       }
     }
@@ -525,7 +569,7 @@
         D.blockChecked = true;
         for (const o of teams[1 - p.team]) {
           if (hyp(o.x - p.x, o.z - p.z) < 1.25 && o.y > 0.3) {
-            const chance = o === controlled ? 0.6 : game.demo ? 0.3 : o.team === 1 ? 0.25 + 0.25 * game.diff : 0.35;
+            const chance = isHuman(o) ? 0.6 : game.demo ? 0.3 : cpuTeam(o.team) ? 0.25 + 0.25 * game.diff : 0.35;
             if (Math.random() < chance) {
               looseBall();
               ball.x = p.x; ball.y = p.y + p.height * 1.15; ball.z = p.z;
@@ -587,7 +631,7 @@
     const d = hyp(h.x - p.x, h.z - p.z);
     if (d > 1.3) return;
     p.facing = Math.sign(h.x - p.x) || p.facing;
-    const ch = p === controlled ? 0.36 : 0.3;
+    const ch = isHuman(p) ? 0.36 : 0.3;
     if (Math.random() < ch) {
       looseBall();
       ball.x = h.x + (p.x - h.x) * 0.4; ball.z = h.z + (p.z - h.z) * 0.4; ball.y = 0.8;
@@ -605,14 +649,14 @@
     p.vy = v; p.state = 'air'; p.stateT = 0;
   }
 
-  function switchPlayer() {
+  function switchPlayer(team) {
     let best = null, bd = 1e9;
-    for (const p of teams[0]) {
-      if (p === controlled) continue;
+    for (const p of teams[team]) {
+      if (p === ctrl[team]) continue;
       const d = hyp(p.x - ball.x, p.z - ball.z);
       if (d < bd) { bd = d; best = p; }
     }
-    if (best) controlled = best;
+    if (best) ctrl[team] = best;
   }
 
   function pickPassTarget(p, ix, iz) {
@@ -688,7 +732,7 @@
     if (ot) {
       setupJumpBall();
       banner(`延長賽 ${game.quarter - 4}`, '跳球！', '#ffd54a', 1.6);
-      if (!game.demo) controlled = teams[0][2];
+      for (let t = 0; t < 2; t++) if (game.humans[t]) ctrl[t] = teams[t][2];
       return;
     }
     resetPositions();
@@ -696,7 +740,7 @@
     const hp = HOOPS[defendHoop(team)];
     banner(`第 ${game.quarter} 節`, `${TEAMS[team].name}隊發球`, '#fff', 1.5);
     doInbound(team, hp.dir > 0 ? 0.35 : COURT_L - 0.35, MID_Z - 2.5);
-    if (!game.demo && team === 1) controlled = teams[0][0];
+    for (let t = 0; t < 2; t++) if (game.humans[t] && t !== team) ctrl[t] = teams[t][0];
   }
 
   function gameOver() {
@@ -834,7 +878,7 @@
       const n = Math.floor(p.dribble / Math.PI + 0.5);
       if (n !== ball.dribbleN) {
         ball.dribbleN = n;
-        if (Math.abs(ball.x - cam.x) < 10) sfx.bounce(p === controlled ? 0.45 : 0.2);
+        if (Math.abs(ball.x - cam.x) < 10 && net.role !== 'guest') sfx.bounce(isHuman(p) ? 0.45 : 0.2);
       }
       ball.x = p.x + f * 0.38 + p.vx * 0.04;
       ball.z = p.z + 0.14;
@@ -877,7 +921,7 @@
       let r = 0.58;
       if (ball.pass) {
         if (ball.pass.to === p) r = 0.95;
-        else if (p.team !== ball.pass.from.team && (p === controlled || ball.pass.risky)) r = 0.45;
+        else if (p.team !== ball.pass.from.team && (isHuman(p) || ball.pass.risky)) r = 0.45;
         else continue;
       }
       else if (!ball.pass && !ball.shot && ball.y < 1.2) r = 0.7;
@@ -1137,14 +1181,14 @@
     let tx = man.x + dx / dd * g, tz = man.z + dz / dd * g;
     if (!onBall && h) { tx += (h.x - tx) * 0.18; tz += (h.z - tz) * 0.18; }
     // reaction lag
-    const lag = game.demo ? 4 : p.team === 1 ? DIFFS[game.diff].lag : 4;
+    const lag = game.demo ? 4 : cpuTeam(p.team) ? DIFFS[game.diff].lag : 4;
     const k = Math.min(1, dt * lag);
     p.tx += (tx - p.tx) * k; p.tz += (tz - p.tz) * k;
     if (hyp(p.tx - tx, p.tz - tz) > 4) { p.tx = tx; p.tz = tz; }
     const dist = hyp(p.tx - p.x, p.tz - p.z);
     moveTo(p, p.tx, p.tz, dist > 2.0, 0.15);
     if (onBall && hyp(man.x - p.x, man.z - p.z) < 1.2 && game.phase === 'live') {
-      const rate = game.demo ? 0.22 : p.team === 1 ? DIFFS[game.diff].steal : 0.22;
+      const rate = game.demo ? 0.22 : cpuTeam(p.team) ? DIFFS[game.diff].steal : 0.22;
       if (Math.random() < dt * rate) trySteal(p);
     }
   }
@@ -1201,12 +1245,12 @@
   // =====================================================================
   // User control
   // =====================================================================
-  function handleUser() {
-    const p = controlled;
+  function handleUser(t, inp) {
+    const p = ctrl[t];
     if (!p) return;
-    const ax = input.axis();
+    const ax = inp.axis();
     const hasBall = ball.holder === p;
-    const sprint = input.isDown('sprint');
+    const sprint = inp.isDown('sprint');
     const sp = (sprint ? SPRINT : RUN) * (hasBall ? 0.92 : 1);
     p.wantVx = ax.x * sp; p.wantVz = ax.z * sp;
     p.sprint = sprint && ax.m > 0.1;
@@ -1216,17 +1260,22 @@
     }
     if (game.phase === 'break') { p.wantVx = p.wantVz = 0; return; }
 
-    if (input.hit('shoot')) {
+    if (inp.hit('shoot')) {
       if (hasBall && p.state === 'idle' && p.y === 0) {
         if (canDunk(p)) startDunk(p); else startShot(p);
       } else if (!hasBall) jump(p, 4.5);
     }
-    if (input.up('shoot') && hasBall && p.state === 'shoot') releaseShot(p, qFromT(p.stateT));
-    if (input.hit('pass')) {
+    if (inp.up('shoot')) {
+      // an online player's release is judged by how long they held the key on their own machine
+      const held = inp === remoteInput && inp.held != null ? inp.held : p.stateT;
+      if (inp === remoteInput) inp.held = null;
+      if (hasBall && p.state === 'shoot') releaseShot(p, qFromT(held));
+    }
+    if (inp.hit('pass')) {
       if (hasBall && p.state === 'idle') passTo(p, pickPassTarget(p, ax.x, ax.z));
       else if (ball.holder && ball.holder.team !== p.team) trySteal(p);
     }
-    if (input.hit('switch') && !(ball.holder && ball.holder.team === 0)) switchPlayer();
+    if (inp.hit('switch') && !(ball.holder && ball.holder.team === t)) switchPlayer(t);
   }
 
   // =====================================================================
@@ -1252,8 +1301,10 @@
     if (game.phase === 'live') { clocks(dt); if (!game.demo) game.playTime += dt; }
 
     computeChasers();
-    if (!game.demo && game.mode === 'play') handleUser();
-    for (const p of players) if (p !== controlled) ai(p, dt);
+    if (game.mode === 'play') {
+      for (let t = 0; t < 2; t++) if (ctrl[t]) handleUser(t, t === game.localTeam ? input : remoteInput);
+    }
+    for (const p of players) if (!isHuman(p)) ai(p, dt);
     if (game.phase !== 'jump' && game.phase !== 'break') {
       for (const p of players) updatePlayer(p, dt);
       separate();
@@ -1280,6 +1331,7 @@
   // =====================================================================
   const menuButtons = [];
   function menuInput() {
+    if (lobbyOpen()) return;
     if (input.hit('left')) { game.diff = (game.diff + 2) % 3; sfx.click(); }
     if (input.hit('right')) { game.diff = (game.diff + 1) % 3; sfx.click(); }
     if (input.hit('up')) { game.qIdx = (game.qIdx + 1) % QUARTER_OPTS.length; sfx.click(); }
@@ -1291,6 +1343,298 @@
     input.endFrame();
   }
 
+  // =====================================================================
+  // Network (online 1v1 over WebRTC via PeerJS)
+  //  - the host runs the whole simulation and controls 烈焰 (team 0)
+  //  - the guest controls 浪潮 (team 1): it sends its keys and renders the host's snapshots
+  // =====================================================================
+  const ROOM_PREFIX = 'fcslam-v1-';
+  const STATES = ['idle', 'shoot', 'post', 'dunk', 'air'];
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const $ = (id) => document.getElementById(id);
+  const lobbyOpen = () => !$('lobby').hidden;
+
+  function peerOptions() {
+    // optional self-hosted signalling server: ?peerhost=example.com&peerport=443&peerpath=/&peersecure=1
+    const q = new URLSearchParams(location.search);
+    const o = { debug: 0 };
+    if (q.get('peerhost')) {
+      o.host = q.get('peerhost');
+      o.port = Number(q.get('peerport')) || 9000;
+      o.path = q.get('peerpath') || '/';
+      o.secure = q.get('peersecure') === '1';
+    }
+    return o;
+  }
+  function loadPeerJS() {
+    return new Promise((resolve, reject) => {
+      if (window.Peer) return resolve();
+      const sc = document.createElement('script');
+      sc.src = 'vendor/peerjs.min.js';
+      sc.onload = () => (window.Peer ? resolve() : reject(new Error('無法載入連線元件')));
+      sc.onerror = () => reject(new Error('無法載入連線元件'));
+      document.head.appendChild(sc);
+    });
+  }
+  function randomCode() {
+    const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let c = '';
+    for (let i = 0; i < 5; i++) c += A[(Math.random() * A.length) | 0];
+    return c;
+  }
+  function peerErr(e) {
+    if (e.type === 'peer-unavailable') return '找不到這個房間，請確認代碼是否正確';
+    if (e.type === 'browser-incompatible') return '這個瀏覽器不支援連線對戰';
+    if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(e.type)) return '連不上連線伺服器，請檢查網路後重試';
+    return `連線錯誤（${e.type || e.message}）`;
+  }
+
+  function showLobby(kind) {
+    $('lobby').hidden = false;
+    $('lobbyHost').hidden = kind !== 'host';
+    $('lobbyJoin').hidden = kind !== 'join';
+    setStatus('');
+  }
+  function hideLobby() { $('lobby').hidden = true; }
+  function setStatus(text, err) {
+    const el = $('lobbyStatus');
+    el.textContent = text;
+    el.classList.toggle('err', !!err);
+  }
+
+  function leaveNet() {
+    const c = net.conn, p = net.peer;
+    net.role = null; net.conn = null; net.peer = null; net.sfxQ.length = 0;
+    try { if (c && c.open) c.send({ t: 'bye' }); } catch (e) { /* ignore */ }
+    try { if (c) c.close(); } catch (e) { /* ignore */ }
+    try { if (p) p.destroy(); } catch (e) { /* ignore */ }
+    remoteInput.reset();
+  }
+  function leaveToMenu(text) {
+    leaveNet();
+    hideLobby();
+    newGame(true);
+    if (text) banner(text, '', '#ffb14a', 2.5);
+  }
+
+  function wireConn(conn, onOpen) {
+    conn.on('open', () => { if (net.conn === conn) onOpen(); });
+    conn.on('data', (m) => { if (net.conn === conn) onNetData(m); });
+    conn.on('close', () => { if (net.conn === conn) onNetClose(); });
+    conn.on('error', () => { if (net.conn === conn) onNetClose(); });
+  }
+
+  async function hostRoom() {
+    leaveNet();
+    showLobby('host');
+    $('roomCode').textContent = '·····';
+    $('roomLink').value = '';
+    setStatus('建立房間中…');
+    try { await loadPeerJS(); } catch (e) { setStatus(e.message, true); return; }
+    if (lobbyOpen() === false) return;
+    const code = randomCode();
+    const peer = new window.Peer(ROOM_PREFIX + code, peerOptions());
+    net.peer = peer; net.role = 'host-wait'; net.code = code;
+    peer.on('open', () => {
+      if (net.peer !== peer) return;
+      $('roomCode').textContent = code;
+      const u = new URL(location.href);
+      u.hash = ''; u.searchParams.set('room', code);
+      $('roomLink').value = u.toString();
+      setStatus('等待對手加入…（對方打開連結或輸入代碼即可）');
+    });
+    peer.on('connection', (conn) => {
+      if (net.peer !== peer) return;
+      if (net.conn) { // room already taken
+        conn.on('open', () => { conn.send({ t: 'full' }); setTimeout(() => conn.close(), 500); });
+        return;
+      }
+      net.conn = conn;
+      wireConn(conn, () => { hideLobby(); startOnline('host'); });
+    });
+    peer.on('error', (e) => {
+      if (net.peer !== peer) return;
+      if (e.type === 'unavailable-id') { hostRoom(); return; } // code clash: pick another
+      if (net.role === 'host') return; // mid-game signalling hiccups don't matter once connected
+      setStatus(peerErr(e), true);
+    });
+  }
+
+  function openJoin(code, auto) {
+    leaveNet();
+    showLobby('join');
+    $('joinCode').value = code || '';
+    if (auto) doJoin(); else setTimeout(() => $('joinCode').focus(), 50);
+  }
+
+  async function doJoin() {
+    const code = $('joinCode').value.trim().toUpperCase();
+    $('joinCode').value = code;
+    if (!/^[A-Z0-9]{5}$/.test(code)) { setStatus('請輸入 5 碼房間代碼', true); return; }
+    leaveNet();
+    setStatus('連線中…');
+    try { await loadPeerJS(); } catch (e) { setStatus(e.message, true); return; }
+    const peer = new window.Peer(peerOptions());
+    net.peer = peer; net.role = 'guest-wait';
+    peer.on('open', () => {
+      if (net.peer !== peer) return;
+      const conn = peer.connect(ROOM_PREFIX + code, { reliable: true, serialization: 'json' });
+      net.conn = conn;
+      wireConn(conn, () => { hideLobby(); startOnline('guest'); });
+    });
+    peer.on('error', (e) => {
+      if (net.peer !== peer || net.role === 'guest') return;
+      setStatus(peerErr(e), true);
+    });
+    setTimeout(() => {
+      if (net.peer === peer && net.role === 'guest-wait') setStatus('連線逾時，請確認代碼或網路後重試', true);
+    }, 15000);
+  }
+
+  function startOnline(role) {
+    net.role = role;
+    net.lastRecv = performance.now();
+    net.sendT = 0; net.sfxQ.length = 0; net.bannerId = -1;
+    remoteInput.reset();
+    newGame(false, { humans: [true, true], localTeam: role === 'host' ? 0 : 1, online: true });
+    for (const p of players) p.nx = null;
+    banner('連線成功！', role === 'host' ? '你是 烈焰隊（紅）· 跳球開始' : '你是 浪潮隊（藍）· 跳球開始', '#5dff7a', 2);
+    input.endFrame();
+  }
+
+  function onNetData(m) {
+    net.lastRecv = performance.now();
+    if (!m || typeof m !== 'object') return;
+    if (m.t === 'i' && net.role === 'host') applyRemoteInput(m);
+    else if (m.t === 's' && net.role === 'guest') applySnapshot(m);
+    else if (m.t === 'full') leaveToMenu('房間已滿');
+    else if (m.t === 'bye') onNetClose();
+  }
+
+  function onNetClose() {
+    const role = net.role;
+    if (!role) return;
+    leaveNet();
+    if (role === 'host' && game.online) {
+      // keep playing: the CPU takes over the opponent's team
+      game.online = false; game.humans[1] = false; ctrl[1] = null;
+      if (game.mode === 'play') banner('對手已離線', '由電腦接手浪潮隊', '#ffb14a', 2.4);
+      else if (game.mode === 'over') newGame(true);
+    } else if (role === 'guest') {
+      leaveToMenu('與主機的連線中斷');
+    } else {
+      setStatus('連線中斷，請重試', true);
+    }
+  }
+
+  function applyRemoteInput(m) {
+    remoteInput.ax = clamp(Number(m.x) || 0, -1, 1);
+    remoteInput.az = clamp(Number(m.z) || 0, -1, 1);
+    remoteInput.down = new Set((Array.isArray(m.d) ? m.d : []).filter((a) => NET_ACTS.has(a)));
+    for (const a of Array.isArray(m.p) ? m.p : []) if (NET_ACTS.has(a)) remoteInput.pressed.add(a);
+    for (const a of Array.isArray(m.r) ? m.r : []) if (NET_ACTS.has(a)) remoteInput.released.add(a);
+    if (typeof m.h === 'number' && isFinite(m.h)) remoteInput.held = clamp(m.h, 0, 5);
+  }
+
+  function makeSnapshot() {
+    return {
+      t: 's',
+      g: [game.mode, game.score[0], game.score[1], game.quarter, r2(game.clock), r2(game.shotClock),
+        game.possession, game.phase, r2(game.cheer), r2(game.shake), game.winner],
+      st: game.stats,
+      bid: game.bannerId,
+      bn: game.banner ? { text: game.banner.text, sub: game.banner.sub, color: game.banner.color, t: r2(game.banner.t), dur: game.banner.dur } : null,
+      tx: game.texts.map((t) => [t.text, r2(t.x), r2(t.y), r2(t.z), t.color, t.size, r2(t.t)]),
+      p: players.map((p) => [r2(p.x), r2(p.y), r2(p.z), r2(p.vx), r2(p.vz), p.facing, STATES.indexOf(p.state),
+        r2(p.stateT), r2(p.runPhase), r2(p.follow), r2(p.reachT), p.dunk ? DUNKS.indexOf(p.dunk.type) : -1, p.userShot ? 1 : 0]),
+      b: [r2(ball.x), r2(ball.y), r2(ball.z), r2(ball.rot), ball.holder ? players.indexOf(ball.holder) : -1],
+      h: [r2(HOOPS[0].shake), r2(HOOPS[0].net), r2(HOOPS[1].shake), r2(HOOPS[1].net)],
+      c: ctrl.map((p) => (p ? players.indexOf(p) : -1)),
+      sx: net.sfxQ.splice(0),
+    };
+  }
+
+  function applySnapshot(m) {
+    try {
+      const g = m.g;
+      game.mode = g[0] === 'over' ? 'over' : 'play';
+      game.score = [Number(g[1]) || 0, Number(g[2]) || 0];
+      game.quarter = g[3]; game.clock = g[4]; game.shotClock = g[5]; game.possession = g[6];
+      game.phase = g[7]; game.cheer = g[8]; game.shake = Math.max(game.shake, g[9]); game.winner = g[10];
+      if (m.st) game.stats = m.st;
+      if (m.bid !== net.bannerId) { net.bannerId = m.bid; game.banner = m.bn; }
+      game.texts = (m.tx || []).map((a) => ({ text: String(a[0]), x: a[1], y: a[2], z: a[3], color: a[4], size: a[5], t: a[6] }));
+      (m.p || []).forEach((a, i) => {
+        const p = players[i];
+        if (!p) return;
+        p.nx = a[0]; p.ny = a[1]; p.nz = a[2]; p.vx = a[3]; p.vz = a[4]; p.facing = a[5] < 0 ? -1 : 1;
+        p.state = STATES[a[6]] || 'idle'; p.stateT = a[7]; p.runPhase = a[8]; p.follow = a[9]; p.reachT = a[10];
+        p.dunk = a[11] >= 0 && DUNKS[a[11]] ? { type: DUNKS[a[11]], hp: HOOPS[attackHoop(p.team)] } : null;
+        p.userShot = !!a[12];
+      });
+      const b = m.b;
+      ball.nx = b[0]; ball.ny = b[1]; ball.nz = b[2]; ball.rot = b[3];
+      ball.holder = b[4] >= 0 ? players[b[4]] || null : null;
+      ball.state = ball.holder ? 'held' : 'free';
+      HOOPS[0].shake = m.h[0]; HOOPS[0].net = m.h[1]; HOOPS[1].shake = m.h[2]; HOOPS[1].net = m.h[3];
+      ctrl[0] = m.c[0] >= 0 ? players[m.c[0]] || null : null;
+      ctrl[1] = m.c[1] >= 0 ? players[m.c[1]] || null : null;
+      for (const [k, ...args] of m.sx || []) if (SFX_FX.includes(k)) sfxRaw[k](...args);
+    } catch (e) { /* ignore a malformed snapshot */ }
+  }
+
+  function sendGuestInput() {
+    const ax = input.axis();
+    const msg = { t: 'i', x: r2(ax.x), z: r2(ax.z), d: [...input.down], p: [...input.pressed], r: [...input.released] };
+    if (input.released.has('shoot') && input.held != null) msg.h = Math.round(input.held * 1000) / 1000;
+    try { net.conn.send(msg); } catch (e) { /* connection closing */ }
+  }
+
+  function guestTick(dt) {
+    if (input.hit('pause') && (game.mode === 'over' || window.confirm('離開連線對戰？'))) { leaveToMenu(); return; }
+    game.time += dt;
+    if (game.mode === 'play') game.playTime += dt;
+    const k = 1 - Math.exp(-dt * 18);
+    for (const p of players) {
+      if (p.nx == null) continue;
+      if (hyp(p.nx - p.x, p.nz - p.z) > 3) { p.x = p.nx; p.y = p.ny; p.z = p.nz; }
+      else { p.x += (p.nx - p.x) * k; p.y += (p.ny - p.y) * k; p.z += (p.nz - p.z) * k; }
+    }
+    if (ball.holder) positionHeldBall(dt); // dribbling animates locally for smoothness
+    else if (ball.nx != null) {
+      const kb = 1 - Math.exp(-dt * 28);
+      if (hyp(ball.nx - ball.x, ball.ny - ball.y, ball.nz - ball.z) > 2.5) { ball.x = ball.nx; ball.y = ball.ny; ball.z = ball.nz; }
+      else { ball.x += (ball.nx - ball.x) * kb; ball.y += (ball.ny - ball.y) * kb; ball.z += (ball.nz - ball.z) * kb; }
+    }
+    if (net.conn && net.conn.open) sendGuestInput();
+    if (input.released.has('shoot')) input.held = null;
+    if (performance.now() - net.lastRecv > 10000) onNetClose();
+  }
+
+  function hostNetTick(dt) {
+    remoteInput.endFrame();
+    net.sendT += dt;
+    if (net.sendT >= 1 / 30 && net.conn && net.conn.open) {
+      net.sendT = 0;
+      try { net.conn.send(makeSnapshot()); } catch (e) { /* connection closing */ }
+    }
+    if (performance.now() - net.lastRecv > 10000) onNetClose();
+  }
+
+  // tell the other side right away when this tab closes
+  window.addEventListener('pagehide', () => { if (net.role) leaveNet(); });
+
+  // lobby dialog wiring
+  $('lobbyCancel').addEventListener('click', () => { leaveNet(); hideLobby(); });
+  $('joinBtn').addEventListener('click', () => doJoin());
+  $('joinCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') doJoin(); });
+  $('copyLink').addEventListener('click', async () => {
+    const v = $('roomLink').value;
+    if (!v) return;
+    try { await navigator.clipboard.writeText(v); setStatus('已複製連結！等待對手加入…'); }
+    catch (e) { $('roomLink').select(); document.execCommand && document.execCommand('copy'); setStatus('已複製連結！等待對手加入…'); }
+  });
+
   canvas.addEventListener('pointerdown', (e) => {
     sfx.init();
     const r = canvas.getBoundingClientRect();
@@ -1301,7 +1645,7 @@
         if (vx >= b.x && vx <= b.x + b.w && vy >= b.y && vy <= b.y + b.h) { sfx.click(); b.fn(); return; }
       }
     } else if (game.mode === 'over') {
-      newGame(true);
+      if (!game.online && !net.role) newGame(true);
     } else if (game.mode === 'paused') {
       game.mode = 'play';
     }
@@ -1634,13 +1978,14 @@
     ctx.fillStyle = '#fff'; ctx.font = font(Math.round(15 * P.k)); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(String(p.num), np.x + lean * u, np.y);
 
-    if (p === controlled) {
+    if (isHuman(p)) {
+      const mine = p.team === game.localTeam;
       const tp = proj(p.x, p.y + p.height + 0.45, p.z);
-      ctx.fillStyle = '#ffd54a';
+      ctx.fillStyle = mine ? '#ffd54a' : TEAMS[p.team].light;
       ctx.beginPath(); ctx.moveTo(tp.x - 8, tp.y - 10); ctx.lineTo(tp.x + 8, tp.y - 10); ctx.lineTo(tp.x, tp.y); ctx.closePath(); ctx.fill();
       ctx.font = font(13); ctx.fillStyle = '#fff'; ctx.textBaseline = 'bottom';
       ctx.fillText(p.name, tp.x, tp.y - 12);
-      if (p.state === 'shoot' && p.userShot && hasBall) drawMeter(p);
+      if (mine && p.state === 'shoot' && p.userShot && hasBall) drawMeter(p);
     }
   }
 
@@ -1654,7 +1999,9 @@
     ctx.fillStyle = 'rgba(199,255,122,0.35)';
     ctx.fillRect(x, y + h * (1 - zc - zh - 0.12), w, h * 0.12);
     ctx.fillRect(x, y + h * (1 - zc + zh), w, h * 0.12);
-    const fill = clamp(p.stateT / SHOT_MAX_T, 0, 1);
+    // a guest sees their own key-hold time, so the meter isn't delayed by the connection
+    const held = net.role === 'guest' && input.isDown('shoot') ? (performance.now() - input.pressT) / 1000 : p.stateT;
+    const fill = clamp(held / SHOT_MAX_T, 0, 1);
     ctx.fillStyle = '#fff';
     ctx.fillRect(x - 4, y + h * (1 - fill) - 2, w + 8, 4);
   }
@@ -1665,10 +2012,12 @@
     // shadows
     for (const p of players) drawShadow(p.x, p.z, p.y, 0.32);
     drawShadow(ball.x, ball.z, ball.y, 0.14);
-    // controlled ring
-    if (controlled) {
-      const c = proj(controlled.x, 0, controlled.z);
-      ctx.strokeStyle = 'rgba(255,213,74,0.9)'; ctx.lineWidth = 2.5;
+    // controlled rings
+    for (let t = 0; t < 2; t++) {
+      const cp = ctrl[t];
+      if (!cp) continue;
+      const c = proj(cp.x, 0, cp.z);
+      ctx.strokeStyle = t === game.localTeam ? 'rgba(255,213,74,0.9)' : 'rgba(255,255,255,0.55)'; ctx.lineWidth = 2.5;
       ctx.beginPath(); ctx.ellipse(c.x, c.y, 0.5 * S * c.k, 0.15 * S * c.k, 0, 0, 6.283); ctx.stroke();
     }
     // painter's sort
@@ -1708,7 +2057,7 @@
       const nx = t === 0 ? bx + 12 : bx + 90;
       ctx.fillText(TEAMS[t].name, nx, y + 26);
       ctx.font = font(11, 600); ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.fillText(TEAMS[t].en + (t === 0 && !game.demo ? ' (你)' : ''), nx, y + 46);
+      ctx.fillText(TEAMS[t].en + (t === game.localTeam && !game.demo ? ' (你)' : game.online ? ' (對手)' : ''), nx, y + 46);
       ctx.font = font(32, 900); ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
       ctx.fillText(String(game.score[t]), t === 0 ? bx + 151 : bx + 39, y + H / 2 + 1);
       if (game.possession === t && game.phase !== 'break') {
@@ -1751,7 +2100,7 @@
     for (const p of players) {
       ctx.fillStyle = TEAMS[p.team].color;
       ctx.beginPath(); ctx.arc(x + p.x * sx, y + p.z * sz, 4.5, 0, 6.283); ctx.fill();
-      if (p === controlled) { ctx.strokeStyle = '#ffd54a'; ctx.lineWidth = 2; ctx.stroke(); }
+      if (isHuman(p)) { ctx.strokeStyle = p.team === game.localTeam ? '#ffd54a' : '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
     }
     ctx.fillStyle = '#ff9a3d'; ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(x + ball.x * sx, y + ball.z * sz, 3, 0, 6.283); ctx.fill(); ctx.stroke();
@@ -1783,13 +2132,19 @@
     if (input.touch || game.mode !== 'play') return;
     const show = game.playTime < 25 ? 1 : 0.45;
     ctx.globalAlpha = show;
-    const txt = '方向鍵 移動 · Shift 衝刺 · D/空白 按住放開投籃（籃下自動灌籃｜防守時蓋帽）· S 傳球/抄截 · A 換人 · P 暫停 · M 靜音';
+    const txt = '方向鍵 移動 · Shift 衝刺 · D/空白 按住放開投籃（籃下自動灌籃｜防守時蓋帽）· S 傳球/抄截 · A 換人 · '
+      + (game.online || net.role ? 'Esc 離開對戰' : 'P 暫停') + ' · M 靜音';
     ctx.font = font(13, 600); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(txt).width + 24;
     ctx.fillStyle = 'rgba(8,10,20,0.7)'; rrect(VW / 2 - w / 2, VH - 30, w, 22, 6); ctx.fill();
     ctx.fillStyle = '#e8ecf5'; ctx.fillText(txt, VW / 2, VH - 19);
     ctx.globalAlpha = 1;
-    if (sfx.muted) { ctx.fillStyle = '#ffb14a'; ctx.textAlign = 'right'; ctx.fillText('🔇 靜音', VW - 14, 20); }
+    ctx.textAlign = 'right';
+    if (sfx.muted) { ctx.fillStyle = '#ffb14a'; ctx.fillText('🔇 靜音', VW - 14, 20); }
+    if (game.online) {
+      ctx.fillStyle = '#5dff7a';
+      ctx.fillText(`● 連線對戰 · 你是${TEAMS[game.localTeam].name}隊`, VW - 14, sfx.muted ? 40 : 20);
+    }
   }
 
   function panel(x, y, w, h) {
@@ -1807,7 +2162,7 @@
 
   function drawMenu() {
     menuButtons.length = 0;
-    const W = 620, H = 430, x = VW / 2 - W / 2, y = 150;
+    const W = 640, H = 500, x = VW / 2 - W / 2, y = 120;
     panel(x, y, W, H);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = font(58, 900);
@@ -1823,13 +2178,17 @@
     ctx.font = font(16, 700); ctx.fillStyle = '#e8ecf5';
     ctx.fillText('每節長度', VW / 2, y + 222);
     QUARTER_OPTS.forEach((m, i) => button(`${m} 分鐘`, VW / 2 - 230 + i * 118, y + 238, 106, 40, game.qIdx === i, () => { game.qIdx = i; }));
-    button('開始比賽', VW / 2 - 130, y + 302, 260, 56, true, startGame);
+    button('開始比賽（對電腦）', VW / 2 - 150, y + 300, 300, 54, true, startGame);
+    ctx.font = font(15, 700); ctx.fillStyle = '#e8ecf5';
+    ctx.fillText('連線對戰（和朋友 1 對 1）', VW / 2, y + 378);
+    button('建立房間', VW / 2 - 150, y + 394, 142, 44, false, hostRoom);
+    button('加入房間', VW / 2 + 8, y + 394, 142, 44, false, () => openJoin(''));
 
     ctx.font = font(13, 600); ctx.fillStyle = '#9fb0d0';
     const lines = input.touch
       ? ['左側搖桿移動 · 投籃鍵：按住放開（綠區出手最準），籃下自動灌籃', '傳球鍵：進攻傳球 / 防守抄截 · 衝刺時灌籃距離更遠']
       : ['方向鍵 移動 · Shift 衝刺 · D/空白 投籃（按住，在綠區放開）· 靠近籃框按 D 灌籃', 'S 傳球（可配合方向選人）/ 防守抄截 · 防守時 D 跳起蓋帽 · A 換人 · Enter 開始'];
-    lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 384 + i * 20));
+    lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 458 + i * 20));
   }
 
   function drawPause() {
@@ -1845,7 +2204,7 @@
     ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, 0, VW, VH);
     const W = 600, H = 400, x = VW / 2 - W / 2, y = 150;
     panel(x, y, W, H);
-    const win = game.winner === 0;
+    const win = game.winner === game.localTeam;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = font(54, 900); ctx.fillStyle = win ? '#ffd54a' : '#9fb0d0';
     ctx.fillText(win ? '勝利！' : '落敗…', VW / 2, y + 55);
@@ -1870,7 +2229,10 @@
       ctx.fillText(fn(game.stats[1]), VW / 2 + 150, ry);
     });
     ctx.font = font(16, 600); ctx.fillStyle = '#ffd54a';
-    ctx.fillText('按 Enter / 點擊畫面 返回主選單', VW / 2, y + H - 28);
+    const foot = !game.online ? '按 Enter / 點擊畫面 返回主選單'
+      : net.role === 'host' ? (input.touch ? '投籃鍵 再來一場 · II 離開' : '按 Enter 再來一場 · Esc 離開')
+        : (input.touch ? '等待主機開新局 · II 離開' : '等待主機開新局 · Esc 離開');
+    ctx.fillText(foot, VW / 2, y + H - 28);
   }
 
   function render() {
@@ -1895,17 +2257,25 @@
   // =====================================================================
   function tick(dt) {
     if (input.hit('mute')) sfx.toggle();
-    if (game.mode === 'menu') {
+    if (net.role === 'guest') {
+      guestTick(dt);
+    } else if (game.mode === 'menu') {
       menuInput();
       if (game.mode === 'menu') simulate(dt);
     } else if (game.mode === 'play') {
-      if (input.hit('pause')) { game.mode = 'paused'; }
-      else simulate(dt);
+      if (input.hit('pause')) {
+        if (!game.online) game.mode = 'paused';
+        else if (window.confirm('離開連線對戰？')) leaveToMenu();
+      } else simulate(dt);
     } else if (game.mode === 'paused') {
       if (input.hit('pause') || input.hit('start')) game.mode = 'play';
     } else if (game.mode === 'over') {
-      if (input.hit('start')) newGame(true);
+      if (game.online && net.role === 'host') {
+        if (input.hit('start')) startOnline('host');
+        else if (input.hit('pause')) leaveToMenu();
+      } else if (input.hit('start')) newGame(true);
     }
+    if (net.role === 'host') hostNetTick(dt);
     // cosmetic timers
     game.cheer = Math.max(0, game.cheer - dt * 0.8);
     for (const t of game.texts) t.t += dt;
@@ -1926,14 +2296,18 @@
 
   newGame(true);
   requestAnimationFrame(frame);
+  // shared invite link: ?room=CODE joins straight away
+  const roomParam = new URLSearchParams(location.search).get('room');
+  if (roomParam) openJoin(roomParam.toUpperCase().slice(0, 5), true);
 
   // debug / test hook
   window.__bb = {
     game, ball, cam, HOOPS,
     get players() { return players; },
-    get controlled() { return controlled; },
+    get controlled() { return ctrl[game.localTeam]; },
+    ctrl, net, remoteInput,
     newGame, startGame,
-    _: { giveTo, startShot, releaseShot, qFromT, startDunk, doInbound },
+    _: { giveTo, startShot, releaseShot, qFromT, startDunk, doInbound, hostRoom, openJoin },
     step(seconds, dt = 1 / 60) { for (let t = 0; t < seconds; t += dt) tick(dt); },
   };
 })();

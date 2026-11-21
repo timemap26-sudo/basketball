@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0b0f1a">
+<title>全場灌籃 Full Court Slam</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: #0b0f1a;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    font-family: "Segoe UI", "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+  }
+  canvas { display: block; width: 100vw; height: 100vh; }
+
+  #touch { position: fixed; inset: 0; pointer-events: none; display: none; }
+  #touch.on { display: block; }
+  #stick {
+    position: absolute; left: 4vw; bottom: 6vh; width: 150px; height: 150px; border-radius: 50%;
+    background: rgba(255,255,255,.08); border: 2px solid rgba(255,255,255,.25); pointer-events: auto;
+  }
+  #knob {
+    position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px;
+    border-radius: 50%; background: rgba(255,255,255,.35);
+  }
+  #btns {
+    position: absolute; right: 3vw; bottom: 5vh; width: 240px; height: 210px; pointer-events: none;
+  }
+  #btns button {
+    position: absolute; pointer-events: auto; border-radius: 50%; border: 2px solid rgba(255,255,255,.4);
+    color: #fff; font: 700 15px/1.1 inherit; font-family: inherit; background: rgba(255,255,255,.12);
+    -webkit-tap-highlight-color: transparent;
+  }
+  #btns button small { font-size: 10px; opacity: .8; font-weight: 400; }
+  #btns button.down { background: rgba(255,255,255,.35); }
+  #btns [data-act=shoot]  { right: 0;    bottom: 0;    width: 104px; height: 104px; background: rgba(232,69,44,.45); }
+  #btns [data-act=pass]   { right: 120px; bottom: 8px;  width: 80px;  height: 80px;  background: rgba(43,125,233,.45); }
+  #btns [data-act=sprint] { right: 16px;  bottom: 122px; width: 72px;  height: 72px; }
+  #btns [data-act=switch] { right: 120px; bottom: 112px; width: 62px;  height: 62px; }
+  #btns [data-act=pause]  { right: 200px; bottom: 150px; width: 46px;  height: 46px; font-size: 13px; }
+  #rotate {
+    position: fixed; left: 0; right: 0; top: 12px; text-align: center; color: #ffd54a; font-size: 14px;
+    pointer-events: none; display: none;
+  }
+  @media (max-height: 500px) {
+    #btns { transform: scale(.78); transform-origin: bottom right; }
+    #stick { width: 120px; height: 120px; }
+  }
+  @media (orientation: portrait) and (pointer: coarse) { #rotate { display: block; } }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="全場灌籃籃球遊戲"></canvas>
+
+<div id="rotate">📱 請將手機橫放，遊戲畫面更大</div>
+<div id="touch">
+  <div id="stick"><div id="knob"></div></div>
+  <div id="btns">
+    <button data-act="pause">II</button>
+    <button data-act="switch">換人</button>
+    <button data-act="sprint">衝刺</button>
+    <button data-act="pass">傳球<br><small>抄截</small></button>
+    <button data-act="shoot">投籃<br><small>灌籃 / 蓋帽</small></button>
+  </div>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>

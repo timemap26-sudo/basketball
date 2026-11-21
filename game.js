@@ -149,10 +149,15 @@
   const input = {
     down: new Set(), pressed: new Set(), released: new Set(),
     stick: { x: 0, y: 0, active: false }, touch: false,
-    isDown(a) { return this.down.has(a); },
+    isDown(a) { return this.down.has(a) || (a === 'sprint' && this.touchSprinting()); },
     hit(a) { return this.pressed.has(a); },
     up(a) { return this.released.has(a); },
     pressT: 0, held: null,
+    // phones: the sprint button is an on/off toggle, and pushing the stick to its edge also sprints
+    sprintToggle: false,
+    touchSprinting() {
+      return this.sprintToggle || (this.stick.active && hyp(this.stick.x, this.stick.y) > STICK_SPRINT);
+    },
     press(a) {
       if (this.down.has(a)) return;
       this.down.add(a); this.pressed.add(a);
@@ -202,6 +207,7 @@
   };
 
   // touch controls
+  const STICK_SPRINT = 0.9;
   const touchEl = document.getElementById('touch');
   const stickEl = document.getElementById('stick');
   const knobEl = document.getElementById('knob');
@@ -222,6 +228,7 @@
     input.stick.x = Math.abs(dx) < 0.15 ? 0 : dx;
     input.stick.y = Math.abs(dy) < 0.15 ? 0 : dy;
     knobEl.style.transform = `translate(${dx * R * 0.6}px, ${dy * R * 0.6}px)`;
+    knobEl.classList.toggle('fast', hyp(dx, dy) > STICK_SPRINT);
   }
   stickEl.addEventListener('pointerdown', (e) => {
     sfx.init(); stickId = e.pointerId; input.stick.active = true;
@@ -232,11 +239,21 @@
     if (e.pointerId !== stickId) return;
     stickId = null; input.stick.active = false; input.stick.x = input.stick.y = 0;
     knobEl.style.transform = '';
+    knobEl.classList.remove('fast');
   };
   stickEl.addEventListener('pointerup', stickEnd);
   stickEl.addEventListener('pointercancel', stickEnd);
   for (const b of document.querySelectorAll('#btns button')) {
     const act = b.dataset.act;
+    if (act === 'sprint') {
+      b.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); sfx.init();
+        input.sprintToggle = !input.sprintToggle;
+        b.classList.toggle('on', input.sprintToggle);
+      });
+      b.addEventListener('contextmenu', (e) => e.preventDefault());
+      continue;
+    }
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault(); sfx.init(); b.setPointerCapture(e.pointerId); b.classList.add('down');
       if (act === 'shoot' && game.mode !== 'play') input.press('start');
@@ -1585,7 +1602,9 @@
 
   function sendGuestInput() {
     const ax = input.axis();
-    const msg = { t: 'i', x: r2(ax.x), z: r2(ax.z), d: [...input.down], p: [...input.pressed], r: [...input.released] };
+    const down = [...input.down];
+    if (input.touchSprinting() && !down.includes('sprint')) down.push('sprint');
+    const msg = { t: 'i', x: r2(ax.x), z: r2(ax.z), d: down, p: [...input.pressed], r: [...input.released] };
     if (input.released.has('shoot') && input.held != null) msg.h = Math.round(input.held * 1000) / 1000;
     try { net.conn.send(msg); } catch (e) { /* connection closing */ }
   }
@@ -2186,7 +2205,7 @@
 
     ctx.font = font(13, 600); ctx.fillStyle = '#9fb0d0';
     const lines = input.touch
-      ? ['左側搖桿移動 · 投籃鍵：按住放開（綠區出手最準），籃下自動灌籃', '傳球鍵：進攻傳球 / 防守抄截 · 衝刺時灌籃距離更遠']
+      ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開（綠區出手最準），籃下自動灌籃', '傳球鍵：進攻傳球 / 防守抄截 · 衝刺鍵點一下開關 · 衝刺時灌籃距離更遠']
       : ['方向鍵 移動 · Shift 衝刺 · D/空白 投籃（按住，在綠區放開）· 靠近籃框按 D 灌籃', 'S 傳球（可配合方向選人）/ 防守抄截 · 防守時 D 跳起蓋帽 · A 換人 · Enter 開始'];
     lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 458 + i * 20));
   }

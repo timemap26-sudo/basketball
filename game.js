@@ -23,14 +23,14 @@
   ];
   const ROSTER = [
     [
-      { num: 7, name: '小飛', skin: '#f1c27d', hair: '#2b1b0e', height: 1.9 },
-      { num: 23, name: '阿傑', skin: '#c68642', hair: '#1a1a1a', height: 1.98 },
-      { num: 34, name: '大山', skin: '#8d5524', hair: '#111', height: 2.08 },
+      { num: 7, name: '小飛', skin: '#f1c27d', hair: '#2b1b0e', style: 'spiky', height: 1.9 },
+      { num: 23, name: '阿傑', skin: '#c68642', hair: '#1a1a1a', style: 'afro', height: 1.98 },
+      { num: 34, name: '大山', skin: '#8d5524', hair: '#111', style: 'buzz', height: 2.08 },
     ],
     [
-      { num: 3, name: '閃電', skin: '#ffdbac', hair: '#5a3a1a', height: 1.9 },
-      { num: 11, name: '阿浪', skin: '#e0ac69', hair: '#222', height: 1.98 },
-      { num: 21, name: '巨塔', skin: '#a1665e', hair: '#0d0d0d', height: 2.1 },
+      { num: 3, name: '閃電', skin: '#ffdbac', hair: '#8a5a2b', style: 'bun', height: 1.9 },
+      { num: 11, name: '阿浪', skin: '#e0ac69', hair: '#2a2a3a', style: 'swoop', height: 1.98 },
+      { num: 21, name: '巨塔', skin: '#a1665e', hair: '#1a1a1a', style: 'mohawk', height: 2.1 },
     ],
   ];
   const DIFFS = [
@@ -314,7 +314,7 @@
     cheer: 0, shake: 0, time: 0, playTime: 0,
     stats: null,
     winner: -1,
-    humans: [false, false], localTeam: 0, online: false, bannerId: 0,
+    humans: [false, false], localTeam: 0, online: false, bannerId: 0, lastScoreTeam: -1,
   };
   let players = [];
   let teams = [[], []];
@@ -336,7 +336,7 @@
       facing: team === 0 ? 1 : -1, state: 'idle', stateT: 0, runPhase: rand(0, 6), dribble: 0,
       lockT: 0, stunT: 0, stealCD: 0, reachT: 0, jumpAt: -1, aiT: 0, spot: [0, 1, 5][idx], spotT: rand(2, 5),
       cutT: 0, driveSide: Math.random() < 0.5 ? 1 : -1, sprint: false, releaseAt: 0, follow: 0,
-      dunk: null, plan: 'drive', planT: 0, userShot: false, catchT: 0,
+      dunk: null, plan: 'drive', planT: 0, userShot: false, catchT: 0, blinkPh: rand(0, 4),
     };
   }
   const reachOf = (p) => p.height * 1.22 + p.y + (p.y > 0.05 ? 0.15 : 0);
@@ -513,7 +513,7 @@
     contest = Math.min(contest, 1.6);
     const sigma = (0.022 + 0.0058 * d) * (1 + 3.0 * (1 - q)) * (1 + 0.8 * contest);
     const tx = hp.x + gauss() * sigma, tz = hp.z + gauss() * sigma;
-    const rx = p.x + p.facing * 0.1, ry = p.y + p.height * 1.2, rz = p.z;
+    const rx = p.x + p.facing * 0.1, ry = p.y + p.height * 1.06, rz = p.z;
     const t = 0.6 + 0.1 * d;
     ball.holder = null; ball.state = 'free';
     ball.x = rx; ball.y = ry; ball.z = rz;
@@ -701,6 +701,7 @@
     const shot = ball.shot && ball.shot.hoop === hi ? ball.shot : null;
     const pts = shot ? shot.points : 2;
     game.score[team] += pts;
+    game.lastScoreTeam = team;
     const st = game.stats[team];
     if (shot) { st.fgm++; if (pts === 3) st.tpm++; if (shot.dunk) st.dunks++; shot.scored = true; }
     else ball.shot = { team, hoop: hi, points: 2, scored: true };
@@ -875,7 +876,7 @@
     const p = ball.holder;
     const f = p.facing;
     if (p.state === 'shoot') {
-      ball.x = p.x + f * 0.1; ball.y = p.y + p.height * 1.17; ball.z = p.z + 0.05;
+      ball.x = p.x + f * 0.1; ball.y = p.y + p.height * 1.06; ball.z = p.z + 0.05;
     } else if (p.state === 'dunk' && p.dunk) {
       const s = clamp(p.stateT / (DUNK_UP * DUNK_SLAM), 0, 1);
       const t = p.dunk.type.en;
@@ -1562,7 +1563,7 @@
     return {
       t: 's',
       g: [game.mode, game.score[0], game.score[1], game.quarter, r2(game.clock), r2(game.shotClock),
-        game.possession, game.phase, r2(game.cheer), r2(game.shake), game.winner],
+        game.possession, game.phase, r2(game.cheer), r2(game.shake), game.winner, game.lastScoreTeam],
       st: game.stats,
       bid: game.bannerId,
       bn: game.banner ? { text: game.banner.text, sub: game.banner.sub, color: game.banner.color, t: r2(game.banner.t), dur: game.banner.dur } : null,
@@ -1583,6 +1584,7 @@
       game.score = [Number(g[1]) || 0, Number(g[2]) || 0];
       game.quarter = g[3]; game.clock = g[4]; game.shotClock = g[5]; game.possession = g[6];
       game.phase = g[7]; game.cheer = g[8]; game.shake = Math.max(game.shake, g[9]); game.winner = g[10];
+      game.lastScoreTeam = g[11] === 0 || g[11] === 1 ? g[11] : -1;
       if (m.st) game.stats = m.st;
       if (m.bid !== net.bannerId) { net.bannerId = m.bid; game.banner = m.bn; }
       game.texts = (m.tx || []).map((a) => ({ text: String(a[0]), x: a[1], y: a[2], z: a[3], color: a[4], size: a[5], t: a[6] }));
@@ -1982,15 +1984,110 @@
     ctx.restore();
   }
 
+  const OUTLINE = 'rgba(45,25,20,0.55)';
   function limb(x0, y0, x1, y1, bend, w, color) {
     const mx = (x0 + x1) / 2 + bend[0], my = (y0 + y1) / 2 + bend[1];
-    ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(mx, my); ctx.lineTo(x1, y1); ctx.stroke();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(mx, my); ctx.lineTo(x1, y1);
+    ctx.strokeStyle = OUTLINE; ctx.lineWidth = w + 0.045; ctx.stroke();
+    ctx.strokeStyle = color; ctx.lineWidth = w; ctx.stroke();
   }
+  function blob(color, outline = true) {
+    ctx.fillStyle = color; ctx.fill();
+    if (outline) { ctx.strokeStyle = OUTLINE; ctx.lineWidth = 0.03; ctx.stroke(); }
+  }
+  function circ(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); }
   function shade(hex, amt) {
     const n = parseInt(hex.slice(1), 16);
     const r = clamp(((n >> 16) & 255) * amt, 0, 255) | 0, g = clamp(((n >> 8) & 255) * amt, 0, 255) | 0, b = clamp((n & 255) * amt, 0, 255) | 0;
     return `rgb(${r},${g},${b})`;
+  }
+
+  // hair behind the head (drawn first)
+  function hairBack(p, hx, hy, r) {
+    ctx.fillStyle = p.hair;
+    if (p.style === 'afro') {
+      for (let i = 0; i < 9; i++) {
+        const a = Math.PI * (0.75 + i * 0.19);
+        circ(hx - r * 0.1 + Math.cos(a) * r * 0.95, hy - r * 0.15 + Math.sin(a) * r * 0.95, r * 0.42); ctx.fill();
+      }
+    } else if (p.style === 'bun') {
+      circ(hx - r * 0.35, hy - r * 1.0, r * 0.38); blob(p.hair);
+    }
+  }
+  // hair on top of the head
+  function hairFront(p, hx, hy, r) {
+    const c = p.hair;
+    ctx.fillStyle = c;
+    if (p.style === 'mohawk') {
+      ctx.beginPath();
+      ctx.moveTo(hx - r * 0.75, hy - r * 0.55);
+      ctx.quadraticCurveTo(hx - r * 0.2, hy - r * 1.75, hx + r * 0.55, hy - r * 0.8);
+      ctx.quadraticCurveTo(hx, hy - r * 1.05, hx - r * 0.75, hy - r * 0.55);
+      blob(c);
+      return;
+    }
+    // cap of hair covering the top/back of the head
+    const low = p.style === 'buzz' ? 0.08 : 0.0;
+    ctx.beginPath();
+    ctx.arc(hx, hy, r * 1.04, Math.PI * (0.92 + low), Math.PI * (1.98 - low));
+    ctx.quadraticCurveTo(hx + r * 0.3, hy - r * (0.35 + low), hx - r * 0.2, hy - r * 0.2);
+    ctx.quadraticCurveTo(hx - r * 0.7, hy + r * 0.15, hx - r * 0.98, hy + r * 0.25);
+    ctx.closePath();
+    blob(c);
+    if (p.style === 'spiky') {
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        const a = Math.PI * (1.12 + i * 0.22);
+        const bx = hx + Math.cos(a) * r * 0.9, by = hy + Math.sin(a) * r * 0.9;
+        const tx = hx + Math.cos(a + 0.12) * r * 1.45, ty = hy + Math.sin(a + 0.12) * r * 1.45;
+        ctx.moveTo(bx - Math.sin(a) * r * 0.22, by + Math.cos(a) * r * 0.22);
+        ctx.lineTo(tx, ty);
+        ctx.lineTo(bx + Math.sin(a) * r * 0.22, by - Math.cos(a) * r * 0.22);
+      }
+      blob(c);
+    } else if (p.style === 'swoop') {
+      ctx.beginPath();
+      ctx.moveTo(hx - r * 0.3, hy - r * 0.95);
+      ctx.quadraticCurveTo(hx + r * 1.15, hy - r * 1.05, hx + r * 0.95, hy - r * 0.15);
+      ctx.quadraticCurveTo(hx + r * 0.6, hy - r * 0.6, hx - r * 0.1, hy - r * 0.55);
+      ctx.closePath();
+      blob(c);
+    }
+  }
+
+  function drawFace(p, hx, hy, r, mood) {
+    const ex1 = hx + r * 0.22, ex2 = hx + r * 0.66, ey = hy + r * 0.12;
+    // blush
+    ctx.fillStyle = 'rgba(255,110,130,0.45)';
+    ctx.beginPath(); ctx.ellipse(hx + r * 0.08, hy + r * 0.45, r * 0.17, r * 0.1, 0, 0, 6.283); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(hx + r * 0.8, hy + r * 0.45, r * 0.13, r * 0.09, 0, 0, 6.283); ctx.fill();
+    ctx.strokeStyle = '#2a1a14'; ctx.fillStyle = '#2a1a14'; ctx.lineCap = 'round'; ctx.lineWidth = r * 0.09;
+    const blink = ((game.time + p.blinkPh) % 3.4) < 0.12;
+    if (mood === 'happy') {
+      for (const ex of [ex1, ex2]) { ctx.beginPath(); ctx.arc(ex, ey + r * 0.06, r * 0.12, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke(); }
+    } else if (blink) {
+      for (const ex of [ex1, ex2]) { ctx.beginPath(); ctx.moveTo(ex - r * 0.1, ey); ctx.lineTo(ex + r * 0.1, ey); ctx.stroke(); }
+    } else {
+      for (const [ex, sc] of [[ex1, 0.9], [ex2, 1]]) {
+        ctx.fillStyle = '#2a1a14';
+        ctx.beginPath(); ctx.ellipse(ex, ey, r * 0.12 * sc, r * 0.17 * sc, 0, 0, 6.283); ctx.fill();
+        ctx.fillStyle = '#fff';
+        circ(ex + r * 0.04, ey - r * 0.07, r * 0.055 * sc); ctx.fill();
+        circ(ex - r * 0.04, ey + r * 0.06, r * 0.025 * sc); ctx.fill();
+      }
+    }
+    // mouth
+    ctx.strokeStyle = '#7a2b22'; ctx.lineWidth = r * 0.07;
+    const mx = hx + r * 0.48, my = hy + r * 0.5;
+    if (mood === 'wow') {
+      ctx.fillStyle = '#7a2b22'; ctx.beginPath(); ctx.ellipse(mx, my, r * 0.09, r * 0.12, 0, 0, 6.283); ctx.fill();
+    } else if (mood === 'happy') {
+      ctx.fillStyle = '#c0392b';
+      ctx.beginPath(); ctx.arc(mx, my - r * 0.04, r * 0.17, 0, Math.PI); ctx.closePath(); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(mx, my - r * 0.1, r * 0.12, Math.PI * 0.2, Math.PI * 0.8); ctx.stroke();
+    }
   }
 
   function drawPlayer(p) {
@@ -2005,7 +2102,9 @@
     const sw = moving ? Math.sin(p.runPhase) : 0;
     const amp = Math.min(1, spd / 6);
     const hasBall = ball.holder === p;
-    const lean = moving ? f * 0.06 * amp : 0;
+    const lean = moving ? f * 0.05 * amp : 0;
+    const bob = moving ? -Math.abs(Math.cos(p.runPhase)) * 0.05 * amp : 0;
+    const celebrate = game.cheer > 0.6 && game.lastScoreTeam === p.team && !hasBall && !air && p.state === 'idle';
 
     ctx.save();
     ctx.translate(P.x, P.y);
@@ -2014,61 +2113,74 @@
       const s = clamp(p.stateT / (DUNK_UP * DUNK_SLAM), 0, 1);
       ctx.scale(Math.cos(s * Math.PI * 2), 1);
     }
-    const hipY = -0.98 * hs, shY = -1.5 * hs, headY = -1.74 * hs;
-    const skinBack = shade(p.skin, 0.8);
+    // chibi proportions: big head, short round body
+    const hipY = -0.6 * hs + bob, shY = -1.1 * hs + bob;
+    const headR = 0.33 * hs, headY = -1.45 * hs + bob;
+    const skinBack = shade(p.skin, 0.85);
 
     // hands
     let hb, hf; // back hand, front hand [x, y]
     const ballRel = [(ball.x - p.x) * f, -(ball.y - p.y)];
     const oppHas = ball.holder && ball.holder.team !== p.team;
-    if (p.state === 'shoot' && hasBall) { hf = [0.12, -2.25 * hs]; hb = [0.0, -2.15 * hs]; }
+    if (p.state === 'shoot' && hasBall) { hf = [0.16, -2.02 * hs]; hb = [-0.06, -1.98 * hs]; }
     else if (p.state === 'dunk') {
-      hf = [ballRel[0] * 1 + 0.05, ballRel[1] + 0.05];
-      hb = p.dunk && p.dunk.type.en.startsWith('WIND') ? [-0.2, -1.9 * hs] : [hf[0] - 0.1, hf[1] + 0.04];
+      hf = [ballRel[0] + 0.05, ballRel[1] + 0.05];
+      hb = p.dunk && p.dunk.type.en.startsWith('WIND') ? [-0.25, -1.75 * hs] : [hf[0] - 0.12, hf[1] + 0.05];
     }
-    else if (p.follow > 0 && !hasBall) { hf = [0.32, -2.2 * hs]; hb = [0.18, -1.95 * hs]; }
-    else if (air) { hf = [0.12, -2.4 * hs]; hb = [-0.04, -2.35 * hs]; }
-    else if (p.reachT > 0) { hf = [0.62, -1.0]; hb = [-0.15, -1.05]; }
-    else if (hasBall) { hf = [0.38, -Math.max(0.78, ball.y - p.y + 0.12)]; hb = [-0.12 - sw * 0.1, -1.0]; }
-    else if (oppHas && ball.holder && hyp(ball.holder.x - p.x, ball.holder.z - p.z) < 2.6) { hf = [0.45, -1.3]; hb = [-0.3, -1.35]; }
-    else { hf = [0.12 + sw * 0.18, -0.95 * hs]; hb = [-0.08 - sw * 0.18, -0.95 * hs]; }
+    else if (p.follow > 0 && !hasBall) { hf = [0.36, -1.95 * hs]; hb = [0.2, -1.75 * hs]; }
+    else if (air) { hf = [0.16, -2.05 * hs]; hb = [-0.08, -2.0 * hs]; }
+    else if (celebrate) { const w = Math.sin(game.time * 14) * 0.08; hf = [0.3 + w, -1.95 * hs]; hb = [-0.3 - w, -1.95 * hs]; }
+    else if (p.reachT > 0) { hf = [0.62, -0.85 * hs]; hb = [-0.15, -0.8 * hs]; }
+    else if (hasBall) { hf = [0.36, -Math.max(0.6, ball.y - p.y + 0.1)]; hb = [-0.14 - sw * 0.1, -0.68 * hs]; }
+    else if (oppHas && hyp(ball.holder.x - p.x, ball.holder.z - p.z) < 2.6) { hf = [0.45, -1.05 * hs]; hb = [-0.32, -1.1 * hs]; }
+    else { hf = [0.27 + sw * 0.2, -0.6 * hs]; hb = [-0.12 - sw * 0.2, -0.62 * hs]; }
 
-    // legs
-    let fb, ff; // foot back / front
-    if (air) { fb = [-0.12, hipY * 0.3]; ff = [0.06, hipY * 0.22]; }
-    else { fb = [-sw * 0.32 * amp, -Math.max(0, sw) * 0.14 * amp]; ff = [sw * 0.32 * amp, -Math.max(0, -sw) * 0.14 * amp]; }
-    const legW = 0.13;
+    // feet
+    let fb, ff;
+    if (air) { fb = [-0.14, hipY * 0.35]; ff = [0.08, hipY * 0.25]; }
+    else { fb = [-sw * 0.26 * amp, -Math.max(0, sw) * 0.12 * amp]; ff = [sw * 0.26 * amp, -Math.max(0, -sw) * 0.12 * amp]; }
+    const legW = 0.16;
+    const shoe = (x, y, front) => {
+      ctx.beginPath(); ctx.ellipse(x + 0.06, y - 0.05, 0.15, 0.085, 0, 0, 6.283); blob(front ? T.color : shade(T.color.length === 7 ? T.color : '#888888', 0.8));
+      ctx.fillStyle = '#fff'; ctx.fillRect(x - 0.08, y - 0.02, 0.28, 0.025);
+    };
+    const mood = celebrate ? 'happy' : (air || p.state === 'dunk') ? 'wow' : 'smile';
+
     ctx.save(); ctx.scale(f, 1);
-    limb(0, hipY, fb[0], fb[1], [0.1, 0], legW, skinBack);
-    // back shoe
-    ctx.fillStyle = '#e8e8e8'; ctx.beginPath(); ctx.ellipse(fb[0] + 0.05, fb[1] - 0.03, 0.12, 0.055, 0, 0, 6.283); ctx.fill();
-    // back arm
-    limb(lean, shY + 0.06, hb[0], hb[1], [-0.06, 0.08], 0.1, skinBack);
+    // back leg + arm
+    limb(0, hipY, fb[0], fb[1] - 0.04, [0.06, 0], legW, skinBack);
+    shoe(fb[0], fb[1], false);
+    limb(lean, shY + 0.08, hb[0], hb[1], [-0.05, 0.06], 0.12, skinBack);
+    circ(hb[0], hb[1], 0.075); blob(skinBack);
     // shorts
-    ctx.fillStyle = T.dark;
-    rrect(-0.21 + lean * 0.5, hipY - 0.05, 0.43, 0.36 * hs, 0.05); ctx.fill();
-    // torso / jersey
-    ctx.fillStyle = T.color;
-    rrect(-0.2 + lean, shY - 0.04, 0.41, hipY - shY + 0.09, 0.07); ctx.fill();
-    ctx.fillStyle = T.light; ctx.fillRect(-0.2 + lean, hipY - 0.02, 0.41, 0.04);
+    rrect(-0.27 + lean * 0.5, hipY - 0.06, 0.54, 0.27 * hs, 0.09); blob(T.dark);
+    // round jersey body
+    rrect(-0.26 + lean, shY - 0.03, 0.52, hipY - shY + 0.1, 0.17); blob(T.color);
+    ctx.fillStyle = T.light; ctx.fillRect(-0.22 + lean, hipY - 0.03, 0.44, 0.035);
     // front leg
-    limb(0, hipY, ff[0], ff[1], [0.1, 0], legW, p.skin);
-    ctx.fillStyle = '#fafafa'; ctx.beginPath(); ctx.ellipse(ff[0] + 0.05, ff[1] - 0.03, 0.12, 0.055, 0, 0, 6.283); ctx.fill();
-    ctx.fillStyle = T.color; ctx.fillRect(ff[0] - 0.02, ff[1] - 0.06, 0.12, 0.025);
+    limb(0.04, hipY, ff[0], ff[1] - 0.04, [0.06, 0], legW, p.skin);
+    shoe(ff[0], ff[1], true);
+    // a raised front arm goes behind the big head so it never covers the face
+    const armUp = hf[1] < headY + headR * 0.3;
+    const frontArm = () => { limb(lean, shY + 0.08, hf[0], hf[1], [-0.05, 0.06], 0.12, p.skin); circ(hf[0], hf[1], 0.08); blob(p.skin); };
+    if (armUp) frontArm();
     // head
-    const hx = 0.03 + lean * 1.4;
-    ctx.fillStyle = p.skin; ctx.beginPath(); ctx.arc(hx, headY, 0.125, 0, 6.283); ctx.fill();
-    ctx.fillStyle = p.hair; ctx.beginPath(); ctx.arc(hx - 0.01, headY - 0.02, 0.127, Math.PI * 1.05, Math.PI * 2.05); ctx.fill();
-    ctx.strokeStyle = T.color; ctx.lineWidth = 0.035; ctx.beginPath(); ctx.moveTo(hx - 0.12, headY - 0.04); ctx.lineTo(hx + 0.12, headY - 0.06); ctx.stroke();
-    ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(hx + 0.075, headY + 0.005, 0.016, 0, 6.283); ctx.fill();
-    // front arm
-    limb(lean, shY + 0.06, hf[0], hf[1], [-0.06, 0.08], 0.1, p.skin);
+    const hx = 0.02 + lean * 1.5;
+    hairBack(p, hx, headY, headR);
+    circ(hx, headY, headR); blob(p.skin);
+    circ(hx - headR * 0.72, headY + headR * 0.12, headR * 0.2); blob(p.skin); // ear
+    hairFront(p, hx, headY, headR);
+    // team headband
+    ctx.strokeStyle = T.color; ctx.lineWidth = headR * 0.2; ctx.lineCap = 'butt';
+    ctx.beginPath(); ctx.arc(hx, headY + headR * 0.1, headR * 1.0, Math.PI * 1.18, Math.PI * 1.86); ctx.stroke();
+    drawFace(p, hx, headY, headR, mood);
+    if (!armUp) frontArm();
     ctx.restore();
     ctx.restore();
 
     // jersey number (pixel-space text)
-    const np = proj(p.x, p.y + 1.25 * hs, p.z);
-    ctx.fillStyle = '#fff'; ctx.font = font(Math.round(15 * P.k)); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const np = proj(p.x, p.y + 0.82 * hs - bob, p.z);
+    ctx.fillStyle = '#fff'; ctx.font = font(Math.round(17 * P.k), 900); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(String(p.num), np.x + lean * u, np.y);
 
     if (isHuman(p)) {

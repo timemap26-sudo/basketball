@@ -120,6 +120,7 @@
       steal() { tone(660, 0.1, 'square', 0.07, 1.6); },
       block() { tone(120, 0.22, 'square', 0.14, 0.5); noise(0.15, 0.2, 'lowpass', 900); },
       click() { tone(880, 0.05, 'triangle', 0.08); },
+      chat() { tone(1046, 0.09, 'sine', 0.08); },
     };
   })();
 
@@ -181,6 +182,7 @@
   const typing = (e) => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
   window.addEventListener('keydown', (e) => {
     if (typing(e)) return;
+    if (e.code === 'Enter' && canChat() && game.mode === 'play' && !e.repeat) { e.preventDefault(); chatOpen(true); return; }
     const a = KEYMAP[e.code];
     if (!a) return;
     e.preventDefault();
@@ -1422,6 +1424,7 @@
   function leaveNet() {
     const c = net.conn, p = net.peer;
     net.role = null; net.conn = null; net.peer = null; net.sfxQ.length = 0;
+    resetChat();
     try { if (c && c.open) c.send({ t: 'bye' }); } catch (e) { /* ignore */ }
     try { if (c) c.close(); } catch (e) { /* ignore */ }
     try { if (p) p.destroy(); } catch (e) { /* ignore */ }
@@ -1515,6 +1518,7 @@
     remoteInput.reset();
     newGame(false, { humans: [true, true], localTeam: role === 'host' ? 0 : 1, online: true });
     for (const p of players) p.nx = null;
+    $('chat').classList.remove('hidden');
     banner('連線成功！', role === 'host' ? '你是 烈焰隊（紅）· 跳球開始' : '你是 浪潮隊（藍）· 跳球開始', '#5dff7a', 2);
     input.endFrame();
   }
@@ -1524,6 +1528,7 @@
     if (!m || typeof m !== 'object') return;
     if (m.t === 'i' && net.role === 'host') applyRemoteInput(m);
     else if (m.t === 's' && net.role === 'guest') applySnapshot(m);
+    else if (m.t === 'chat' && (net.role === 'host' || net.role === 'guest')) recvChat(m);
     else if (m.t === 'full') leaveToMenu('房間已滿');
     else if (m.t === 'bye') onNetClose();
   }
@@ -1638,6 +1643,75 @@
       try { net.conn.send(makeSnapshot()); } catch (e) { /* connection closing */ }
     }
     if (performance.now() - net.lastRecv > 10000) onNetClose();
+  }
+
+  // ---------------------------------------------------------------------
+  // Chat (online only) — same design as the tennis game: a bar at the bottom,
+  // Enter / tap to type, quick replies, fading log and a speech bubble over your player
+  // ---------------------------------------------------------------------
+  const chatEl = $('chat'), chatLog = $('chatLog'), chatIn = $('chatIn');
+  const bubbles = [null, null];
+  let chatAt = 0;
+  const canChat = () => !!((net.role === 'host' || net.role === 'guest') && net.conn && net.conn.open);
+  const cleanChat = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  function chatOpen(on) {
+    if (on && !canChat()) return;
+    chatEl.classList.toggle('open', on);
+    if (on) {
+      // let go of every key so your player stops while you type
+      for (const a of [...input.down]) input.release(a);
+      input.sprintToggle = false;
+      const sb = document.querySelector('[data-act=sprint]');
+      if (sb) sb.classList.remove('on');
+      chatIn.focus();
+    } else chatIn.blur();
+  }
+  chatIn.addEventListener('focus', () => { if (canChat()) chatOpen(true); else chatIn.blur(); });
+  chatIn.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== chatIn) chatEl.classList.remove('open'); }, 200));
+  chatIn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); sendChat(chatIn.value); chatOpen(false); }
+    else if (e.key === 'Escape') { e.preventDefault(); chatOpen(false); }
+  });
+  // tapping a quick reply / send shouldn't blur the input first
+  $('chatBar').addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+  $('chatSend').addEventListener('click', () => { sendChat(chatIn.value); chatOpen(false); });
+  $('chatQuick').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (b) { sendChat(b.textContent); chatOpen(false); }
+  });
+  function addChat(team, text) {
+    const d = document.createElement('div');
+    d.className = 'm';
+    const n = document.createElement('b');
+    n.textContent = (team === game.localTeam ? '你' : '對手') + '：';
+    n.style.color = TEAMS[team].light;
+    d.append(n, document.createTextNode(text));
+    chatLog.append(d);
+    while (chatLog.children.length > 6) chatLog.firstChild.remove();
+    setTimeout(() => d.classList.add('old'), 8000);
+    bubbles[team] = { text: text.length > 16 ? text.slice(0, 15) + '…' : text, until: performance.now() + 4500 };
+  }
+  function sendChat(text) {
+    text = cleanChat(text);
+    chatIn.value = '';
+    const now = performance.now();
+    if (!text || !canChat() || now - chatAt < 400) return;
+    chatAt = now;
+    try { net.conn.send({ t: 'chat', m: text }); } catch (e) { return; }
+    addChat(game.localTeam, text);
+  }
+  function recvChat(m) {
+    const text = cleanChat(m.m);
+    if (!text) return;
+    addChat(1 - game.localTeam, text);
+    sfx.chat();
+  }
+  function resetChat() {
+    chatEl.classList.remove('open');
+    chatEl.classList.add('hidden');
+    if (document.activeElement === chatIn) chatIn.blur();
+    chatLog.textContent = '';
+    bubbles[0] = bubbles[1] = null;
   }
 
   // tell the other side right away when this tab closes
@@ -2063,6 +2137,25 @@
     }
   }
 
+  function drawBubbles() {
+    const now = performance.now();
+    for (let t = 0; t < 2; t++) {
+      const b = bubbles[t], p = ctrl[t];
+      if (!b || !p || now > b.until) continue;
+      const s = proj(p.x, p.y + p.height + 1.2, p.z);
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, (b.until - now) / 400);
+      ctx.font = font(15, 600); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const w = ctx.measureText(b.text).width + 22, h = 30;
+      const x = clamp(s.x, w / 2 + 6, VW - w / 2 - 6), y = Math.max(h + 6, s.y);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      rrect(x - w / 2, y - h, w, h, 13); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(s.x - 7, y - 1); ctx.lineTo(s.x + 7, y - 1); ctx.lineTo(s.x, y + 8); ctx.fill();
+      ctx.fillStyle = '#16202a'; ctx.fillText(b.text, x, y - h / 2 + 1);
+      ctx.restore();
+    }
+  }
+
   function drawScoreboard() {
     const W = 560, H = 66, x = VW / 2 - W / 2, y = 10;
     ctx.fillStyle = 'rgba(8,10,20,0.85)'; rrect(x, y, W, H, 10); ctx.fill();
@@ -2149,7 +2242,8 @@
 
   function drawHints() {
     if (input.touch || game.mode !== 'play') return;
-    const show = game.playTime < 25 ? 1 : 0.45;
+    const online = game.online || !!net.role;
+    const show = online ? 0 : game.playTime < 25 ? 1 : 0.45;
     ctx.globalAlpha = show;
     const txt = '方向鍵 移動 · Shift 衝刺 · D/空白 按住放開投籃（籃下自動灌籃｜防守時蓋帽）· S 傳球/抄截 · A 換人 · '
       + (game.online || net.role ? 'Esc 離開對戰' : 'P 暫停') + ' · M 靜音';
@@ -2162,7 +2256,7 @@
     if (sfx.muted) { ctx.fillStyle = '#ffb14a'; ctx.fillText('🔇 靜音', VW - 14, 20); }
     if (game.online) {
       ctx.fillStyle = '#5dff7a';
-      ctx.fillText(`● 連線對戰 · 你是${TEAMS[game.localTeam].name}隊`, VW - 14, sfx.muted ? 40 : 20);
+      ctx.fillText(`● 連線對戰 · 你是${TEAMS[game.localTeam].name}隊 · Enter 聊天`, VW - 14, sfx.muted ? 40 : 20);
     }
   }
 
@@ -2263,6 +2357,7 @@
     ctx.beginPath(); ctx.rect(0, 0, VW, VH); ctx.clip();
     drawWorld();
     if (game.mode !== 'menu') { drawScoreboard(); drawMinimap(); }
+    drawBubbles();
     drawBanner();
     drawHints();
     if (game.mode === 'menu') drawMenu();

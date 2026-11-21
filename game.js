@@ -126,6 +126,9 @@
 
   // online session state (see the Network section below)
   const net = { role: null, peer: null, conn: null, code: '', sendT: 0, lastRecv: 0, sfxQ: [], bannerId: -1 };
+  // voice chat: each side sends its own one-way audio call while its mic is on
+  const voice = { on: false, busy: false, stream: null, outCall: null, inCall: null, remoteOn: false, remoteMuted: false,
+    ctx: null, an: [null, null], src: [null, null], level: [0, 0], buf: null, needPlay: false };
   // sounds the host plays are forwarded to the guest
   const SFX_FX = ['bounce', 'rim', 'board', 'swish', 'dunk', 'cheer', 'whistle', 'buzzer', 'pass', 'steal', 'block'];
   const sfxRaw = {};
@@ -1424,6 +1427,8 @@
 
   function leaveNet() {
     const c = net.conn, p = net.peer;
+    micOff(true);
+    remoteVoiceOff();
     net.role = null; net.conn = null; net.peer = null; net.sfxQ.length = 0;
     resetChat();
     try { if (c && c.open) c.send({ t: 'bye' }); } catch (e) { /* ignore */ }
@@ -1456,6 +1461,7 @@
     const code = randomCode();
     const peer = new window.Peer(ROOM_PREFIX + code, peerOptions());
     net.peer = peer; net.role = 'host-wait'; net.code = code;
+    peer.on('call', onIncomingCall);
     peer.on('open', () => {
       if (net.peer !== peer) return;
       $('roomCode').textContent = code;
@@ -1497,6 +1503,7 @@
     try { await loadPeerJS(); } catch (e) { setStatus(e.message, true); return; }
     const peer = new window.Peer(peerOptions());
     net.peer = peer; net.role = 'guest-wait';
+    peer.on('call', onIncomingCall);
     peer.on('open', () => {
       if (net.peer !== peer) return;
       const conn = peer.connect(ROOM_PREFIX + code, { reliable: true, serialization: 'json' });
@@ -1530,6 +1537,10 @@
     if (m.t === 'i' && net.role === 'host') applyRemoteInput(m);
     else if (m.t === 's' && net.role === 'guest') applySnapshot(m);
     else if (m.t === 'chat' && (net.role === 'host' || net.role === 'guest')) recvChat(m);
+    else if (m.t === 'voice' && (net.role === 'host' || net.role === 'guest')) {
+      if (m.on) addSys('對手開啟了麥克風 🎤');
+      else { remoteVoiceOff(); addSys('對手關閉了麥克風'); }
+    }
     else if (m.t === 'full') leaveToMenu('房間已滿');
     else if (m.t === 'bye') onNetClose();
   }
@@ -1715,6 +1726,148 @@
     chatLog.textContent = '';
     bubbles[0] = bubbles[1] = null;
   }
+
+  function addSys(text) {
+    const d = document.createElement('div');
+    d.className = 'm sys';
+    d.textContent = text;
+    chatLog.append(d);
+    while (chatLog.children.length > 6) chatLog.firstChild.remove();
+    setTimeout(() => d.classList.add('old'), 8000);
+  }
+
+  // ---------------------------------------------------------------------
+  // Voice chat (online only): 🎤 turns your mic on/off, 🔊 mutes the opponent
+  // ---------------------------------------------------------------------
+  const micBtn = $('micBtn'), spkBtn = $('spkBtn'), voiceOut = $('voiceOut');
+  function updateVoiceUI() {
+    micBtn.classList.toggle('on', voice.on);
+    micBtn.classList.toggle('wait', voice.busy);
+    micBtn.title = voice.on ? '關閉麥克風' : '開啟麥克風和對手講話';
+    spkBtn.hidden = !voice.remoteOn;
+    spkBtn.textContent = voice.remoteMuted ? '🔇' : '🔊';
+    spkBtn.classList.toggle('off', voice.remoteMuted);
+    spkBtn.title = voice.remoteMuted ? '打開對手的聲音' : '把對手靜音';
+  }
+  function voiceCtx() {
+    if (!voice.ctx) {
+      try { voice.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; }
+      voice.buf = new Uint8Array(512);
+    }
+    if (voice.ctx.state === 'suspended') voice.ctx.resume();
+    return voice.ctx;
+  }
+  // a quiet analyser per side so we can show who is talking (never routed to the speakers)
+  function watchLevel(team, stream) {
+    unwatchLevel(team);
+    const c = voiceCtx();
+    if (!c) return;
+    try {
+      const src = c.createMediaStreamSource(stream), an = c.createAnalyser();
+      an.fftSize = 512; src.connect(an);
+      voice.src[team] = src; voice.an[team] = an;
+    } catch (e) { /* level meter is optional */ }
+  }
+  function unwatchLevel(team) {
+    try { if (voice.src[team]) voice.src[team].disconnect(); } catch (e) { /* ignore */ }
+    voice.src[team] = voice.an[team] = null; voice.level[team] = 0;
+  }
+  function updateVoiceLevels(dt) {
+    for (let t = 0; t < 2; t++) {
+      const an = voice.an[t];
+      if (!an) { voice.level[t] = 0; continue; }
+      an.getByteTimeDomainData(voice.buf);
+      let sum = 0;
+      for (let i = 0; i < voice.buf.length; i++) { const v = (voice.buf[i] - 128) / 128; sum += v * v; }
+      const rms = Math.sqrt(sum / voice.buf.length);
+      voice.level[t] = Math.max(rms, voice.level[t] - dt * 0.25);
+    }
+  }
+  const isTalking = (t) => voice.level[t] > 0.035 && !(t !== game.localTeam && voice.remoteMuted);
+
+  async function micToggle() {
+    if (voice.busy) return;
+    if (voice.on) { micOff(); return; }
+    if (!canChat()) return;
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) { addSys('這個瀏覽器不支援麥克風（需要 https）'); return; }
+    voice.busy = true; updateVoiceUI();
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false,
+      });
+    } catch (e) {
+      voice.busy = false; updateVoiceUI();
+      addSys(e.name === 'NotAllowedError' ? '沒有麥克風權限：請在瀏覽器網址列允許使用麥克風'
+        : e.name === 'NotFoundError' ? '找不到麥克風' : '無法開啟麥克風');
+      return;
+    }
+    voice.busy = false;
+    if (!canChat() || !net.peer) { stream.getTracks().forEach((tr) => tr.stop()); updateVoiceUI(); return; }
+    voice.stream = stream; voice.on = true;
+    const call = net.peer.call(net.conn.peer, stream, { metadata: { kind: 'voice' } });
+    voice.outCall = call;
+    if (call) {
+      call.on('close', () => { if (voice.outCall === call) micOff(); });
+      call.on('error', () => { if (voice.outCall === call) { micOff(); addSys('語音連線失敗'); } });
+    }
+    watchLevel(game.localTeam, stream);
+    try { net.conn.send({ t: 'voice', on: true }); } catch (e) { /* ignore */ }
+    addSys('麥克風已開啟，對手聽得到你 🎤');
+    updateVoiceUI();
+  }
+  function micOff(silent) {
+    const call = voice.outCall, stream = voice.stream, wasOn = voice.on;
+    voice.outCall = null; voice.stream = null; voice.on = false;
+    try { if (call) call.close(); } catch (e) { /* ignore */ }
+    if (stream) stream.getTracks().forEach((tr) => tr.stop());
+    unwatchLevel(game.localTeam);
+    if (wasOn && !silent && canChat()) { try { net.conn.send({ t: 'voice', on: false }); } catch (e) { /* ignore */ } }
+    if (wasOn && !silent) addSys('麥克風已關閉');
+    updateVoiceUI();
+  }
+  function onIncomingCall(call) {
+    if (!net.conn || call.peer !== net.conn.peer) { try { call.close(); } catch (e) { /* ignore */ } return; }
+    if (voice.inCall) { try { voice.inCall.close(); } catch (e) { /* ignore */ } }
+    voice.inCall = call;
+    call.answer(); // receive only — our own mic goes out on a separate call
+    call.on('stream', (remote) => {
+      if (voice.inCall !== call) return;
+      voiceOut.srcObject = remote;
+      voiceOut.muted = voice.remoteMuted;
+      playVoice();
+      watchLevel(1 - game.localTeam, remote);
+      voice.remoteOn = true;
+      updateVoiceUI();
+    });
+    call.on('close', () => { if (voice.inCall === call) remoteVoiceOff(); });
+  }
+  function playVoice() {
+    const pr = voiceOut.play();
+    if (pr && pr.catch) pr.catch(() => { voice.needPlay = true; addSys('點一下畫面就能聽到對手的聲音'); });
+  }
+  function remoteVoiceOff() {
+    const call = voice.inCall;
+    voice.inCall = null;
+    try { if (call) call.close(); } catch (e) { /* ignore */ }
+    voiceOut.srcObject = null;
+    unwatchLevel(1 - game.localTeam);
+    voice.remoteOn = false;
+    updateVoiceUI();
+  }
+  micBtn.addEventListener('click', () => { sfx.init(); micToggle(); });
+  spkBtn.addEventListener('click', () => {
+    voice.remoteMuted = !voice.remoteMuted;
+    voiceOut.muted = voice.remoteMuted;
+    updateVoiceUI();
+  });
+  // browsers may block audio until the page is touched: retry on the next tap / key
+  const unlockVoice = () => {
+    if (voice.ctx && voice.ctx.state === 'suspended') voice.ctx.resume();
+    if (voice.needPlay && voiceOut.srcObject) { voice.needPlay = false; playVoice(); }
+  };
+  window.addEventListener('pointerdown', unlockVoice, true);
+  window.addEventListener('keydown', unlockVoice, true);
 
   // tell the other side right away when this tab closes
   window.addEventListener('pagehide', () => { if (net.role) leaveNet(); });
@@ -2249,7 +2402,23 @@
     }
   }
 
+  function drawTalking() {
+    for (let t = 0; t < 2; t++) {
+      const p = ctrl[t];
+      if (!p || !isTalking(t)) continue;
+      const s = proj(p.x, p.y + p.height + 0.55, p.z);
+      const x = s.x + 44, y = s.y - 2, pulse = 1 + Math.min(1, voice.level[t] * 6) * 0.25;
+      ctx.save();
+      ctx.fillStyle = t === game.localTeam ? 'rgba(62,196,109,0.95)' : 'rgba(255,255,255,0.95)';
+      circ(x, y, 13 * pulse); ctx.fill();
+      ctx.font = font(15, 400); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('🎤', x, y + 1);
+      ctx.restore();
+    }
+  }
+
   function drawBubbles() {
+    drawTalking();
     const now = performance.now();
     for (let t = 0; t < 2; t++) {
       const b = bubbles[t], p = ctrl[t];
@@ -2368,7 +2537,7 @@
     if (sfx.muted) { ctx.fillStyle = '#ffb14a'; ctx.fillText('🔇 靜音', VW - 14, 20); }
     if (game.online) {
       ctx.fillStyle = '#5dff7a';
-      ctx.fillText(`● 連線對戰 · 你是${TEAMS[game.localTeam].name}隊 · Enter 聊天`, VW - 14, sfx.muted ? 40 : 20);
+      ctx.fillText(`● 連線對戰 · 你是${TEAMS[game.localTeam].name}隊 · Enter 聊天 · 🎤 語音`, VW - 14, sfx.muted ? 40 : 20);
     }
   }
 
@@ -2502,6 +2671,7 @@
       } else if (input.hit('start')) newGame(true);
     }
     if (net.role === 'host') hostNetTick(dt);
+    if (voice.an[0] || voice.an[1]) updateVoiceLevels(dt);
     // cosmetic timers
     game.cheer = Math.max(0, game.cheer - dt * 0.8);
     for (const t of game.texts) t.t += dt;
@@ -2531,7 +2701,7 @@
     game, ball, cam, HOOPS,
     get players() { return players; },
     get controlled() { return ctrl[game.localTeam]; },
-    ctrl, net, remoteInput,
+    ctrl, net, remoteInput, voice,
     newGame, startGame,
     _: { giveTo, startShot, releaseShot, qFromT, startDunk, doInbound, hostRoom, openJoin },
     step(seconds, dt = 1 / 60) { for (let t = 0; t < seconds; t += dt) tick(dt); },

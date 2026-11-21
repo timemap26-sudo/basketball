@@ -100,6 +100,12 @@
     user-select: text; -webkit-user-select: text;
   }
   #chatRow button { padding: 6px 12px; border-radius: 9px; background: #ffd54a; color: #1a1200; border: none; font-weight: 700; }
+  #chatRow button.vbtn { padding: 6px 9px; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.2); font-size: 15px; }
+  #chatRow button.vbtn[hidden] { display: none; }
+  #micBtn.on { background: #3ec46d; border-color: #5dff7a; box-shadow: 0 0 10px rgba(93,255,122,.6); }
+  #micBtn.wait { opacity: .6; }
+  #spkBtn.off { background: rgba(255,90,70,.35); }
+  #chatLog .m.sys { color: #c9d4ea; font-style: italic; }
   #rotate {
     position: fixed; left: 0; right: 0; top: 12px; text-align: center; color: #ffd54a; font-size: 14px;
     pointer-events: none; display: none;
@@ -147,9 +153,10 @@
   <div id="chatLog" aria-live="polite"></div>
   <div id="chatBar">
     <div id="chatQuick"><button>👍 好球！</button><button>😂</button><button>😱 好險</button><button>🔥</button><button>再來一場！</button><button>GG</button></div>
-    <div id="chatRow"><input id="chatIn" maxlength="60" placeholder="💬 打字聊天，Enter 送出" autocomplete="off" enterkeyhint="send" aria-label="聊天訊息"><button id="chatSend">送出</button></div>
+    <div id="chatRow"><input id="chatIn" maxlength="60" placeholder="💬 打字聊天，Enter 送出" autocomplete="off" enterkeyhint="send" aria-label="聊天訊息"><button id="micBtn" class="vbtn" title="開啟麥克風和對手講話" aria-label="麥克風">🎤</button><button id="spkBtn" class="vbtn" title="對手的聲音" aria-label="對手聲音" hidden>🔊</button><button id="chatSend">送出</button></div>
   </div>
 </div>
+<audio id="voiceOut" autoplay playsinline></audio>
 <script src="game.js"></script>
 </body>
 </html>

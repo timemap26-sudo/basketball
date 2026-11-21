@@ -2,7 +2,9 @@
 
 一個純前端、零依賴的 **3 對 3 全場籃球遊戲**（HTML5 Canvas）。可以灌籃、投三分、打全場攻守轉換。
 
-直接用瀏覽器打開 `index.html` 就能玩（電腦或手機皆可）。
+**線上遊玩：<https://timemap26-sudo.github.io/basketball/>**
+
+或直接用瀏覽器打開 `index.html` 就能玩（電腦或手機皆可）。每次推送到 `main` 都會透過 GitHub Actions 自動部署到 GitHub Pages。
 
 ## 玩法
 

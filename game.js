@@ -147,7 +147,7 @@
     // right hand moves with the arrow keys, left hand plays on the ASDF row
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     ShiftLeft: 'sprint', ShiftRight: 'sprint',
-    KeyD: 'shoot', Space: 'shoot', KeyS: 'pass', KeyA: 'switch',
+    KeyD: 'shoot', Space: 'shoot', KeyS: 'pass', KeyA: 'sprint',
     KeyP: 'pause', Escape: 'pause', Enter: 'start', KeyM: 'mute',
   };
   const input = {
@@ -514,7 +514,7 @@
       if (dd < 2.2) contest += (2.2 - dd) / 2.2 * (o.y > 0.15 ? 1.5 : 1);
     }
     contest = Math.min(contest, 1.6);
-    const sigma = (0.022 + 0.0058 * d) * (1 + 3.0 * (1 - q)) * (1 + 0.8 * contest);
+    const sigma = (0.022 + 0.0058 * d) * (1 + 3.0 * (1 - q)) * (1 + 0.8 * contest) * (three ? 0.8 : 1);
     const tx = hp.x + gauss() * sigma, tz = hp.z + gauss() * sigma;
     const rx = p.x + p.facing * 0.1, ry = p.y + p.height * 1.06, rz = p.z;
     const t = 0.6 + 0.1 * d;
@@ -1296,7 +1296,12 @@
     }
     if (inp.hit('pass')) {
       if (hasBall && p.state === 'idle') passTo(p, pickPassTarget(p, ax.x, ax.z));
-      else if (ball.holder && ball.holder.team !== p.team) trySteal(p);
+      else if (!hasBall) {
+        // S on defence: steal when the ball handler is in reach, otherwise switch to the man nearest the ball
+        const h = ball.holder;
+        if (h && h.team !== p.team && hyp(h.x - p.x, h.z - p.z) <= 1.3) trySteal(p);
+        else if (!(h && h.team === t)) switchPlayer(t);
+      }
     }
     if (inp.hit('switch') && !(ball.holder && ball.holder.team === t)) switchPlayer(t);
   }
@@ -2526,7 +2531,7 @@
     const online = game.online || !!net.role;
     const show = online ? 0 : game.playTime < 25 ? 1 : 0.45;
     ctx.globalAlpha = show;
-    const txt = '方向鍵 移動 · Shift 衝刺 · D/空白 按住放開投籃（籃下自動灌籃｜防守時蓋帽）· S 傳球/抄截 · A 換人 · '
+    const txt = '方向鍵 移動 · A/Shift 衝刺 · D/空白 按住放開投籃（籃下自動灌籃｜防守時蓋帽）· S 傳球/抄截/換人 · '
       + (game.online || net.role ? 'Esc 離開對戰' : 'P 暫停') + ' · M 靜音';
     ctx.font = font(13, 600); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(txt).width + 24;
@@ -2581,7 +2586,7 @@
     ctx.font = font(13, 600); ctx.fillStyle = '#9fb0d0';
     const lines = input.touch
       ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開（綠區出手最準），籃下自動灌籃', '傳球鍵：進攻傳球 / 防守抄截 · 衝刺鍵點一下開關 · 衝刺時灌籃距離更遠']
-      : ['方向鍵 移動 · Shift 衝刺 · D/空白 投籃（按住，在綠區放開）· 靠近籃框按 D 灌籃', 'S 傳球（可配合方向選人）/ 防守抄截 · 防守時 D 跳起蓋帽 · A 換人 · Enter 開始'];
+      : ['方向鍵 移動 · A/Shift 衝刺 · D/空白 投籃（按住，在綠區放開）· 靠近籃框按 D 灌籃', 'S 傳球（可配合方向選人）/ 防守抄截或換人 · 防守時 D 跳起蓋帽 · Enter 開始'];
     lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 458 + i * 20));
   }
 

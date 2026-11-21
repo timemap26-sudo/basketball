@@ -127,10 +127,10 @@
   // Input
   // =====================================================================
   const KEYMAP = {
-    KeyW: 'up', ArrowUp: 'up', KeyS: 'down', ArrowDown: 'down',
-    KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right',
+    // right hand moves with the arrow keys, left hand plays on the ASDF row
+    ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     ShiftLeft: 'sprint', ShiftRight: 'sprint',
-    KeyJ: 'shoot', Space: 'shoot', KeyK: 'pass', KeyL: 'switch',
+    KeyD: 'shoot', Space: 'shoot', KeyS: 'pass', KeyA: 'switch',
     KeyP: 'pause', Escape: 'pause', Enter: 'start', KeyM: 'mute',
   };
   const input = {
@@ -308,7 +308,7 @@
     teams = [players.filter((p) => p.team === 0), players.filter((p) => p.team === 1)];
     controlled = demo ? null : teams[0][2];
     setupJumpBall();
-    if (!demo) banner('跳球！', '按住 J / 空白鍵 跳起爭球', '#ffd54a', 1.8);
+    if (!demo) banner('跳球！', '按 D / 空白鍵 跳起爭球', '#ffd54a', 1.8);
   }
 
   function setupJumpBall() {
@@ -1770,7 +1770,7 @@
     if (input.touch || game.mode !== 'play') return;
     const show = game.playTime < 25 ? 1 : 0.45;
     ctx.globalAlpha = show;
-    const txt = 'WASD/方向鍵 移動 · Shift 衝刺 · J/空白 按住放開投籃（籃下自動灌籃｜防守時蓋帽）· K 傳球/抄截 · L 換人 · P 暫停 · M 靜音';
+    const txt = '方向鍵 移動 · Shift 衝刺 · D/空白 按住放開投籃（籃下自動灌籃｜防守時蓋帽）· S 傳球/抄截 · A 換人 · P 暫停 · M 靜音';
     ctx.font = font(13, 600); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(txt).width + 24;
     ctx.fillStyle = 'rgba(8,10,20,0.7)'; rrect(VW / 2 - w / 2, VH - 30, w, 22, 6); ctx.fill();
@@ -1815,7 +1815,7 @@
     ctx.font = font(13, 600); ctx.fillStyle = '#9fb0d0';
     const lines = input.touch
       ? ['左側搖桿移動 · 投籃鍵：按住放開（綠區出手最準），籃下自動灌籃', '傳球鍵：進攻傳球 / 防守抄截 · 衝刺時灌籃距離更遠']
-      : ['WASD 移動 · Shift 衝刺 · J/空白 投籃（按住，在綠區放開）· 靠近籃框按 J 灌籃', 'K 傳球（可配合方向選人）/ 防守抄截 · 防守時 J 跳起蓋帽 · L 換人 · Enter 開始'];
+      : ['方向鍵 移動 · Shift 衝刺 · D/空白 投籃（按住，在綠區放開）· 靠近籃框按 D 灌籃', 'S 傳球（可配合方向選人）/ 防守抄截 · 防守時 D 跳起蓋帽 · A 換人 · Enter 開始'];
     lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 384 + i * 20));
   }
 

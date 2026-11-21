@@ -510,15 +510,18 @@
     reactDefenders(p, 2.6, true);
   }
 
+  // timing of a dunk: rise for DUNK_UP seconds, slam on the way up (no pause at the top), then hang
+  const DUNK_UP = 0.42, DUNK_SLAM = 0.8, DUNK_HANG = 0.32;
   function updateDunk(p, dt) {
-    const D = p.dunk, T = p.stateT, UP = 0.5, HANG = 0.38;
+    const D = p.dunk, T = p.stateT, UP = DUNK_UP, HANG = DUNK_HANG;
     if (!D) { p.state = 'air'; return; }
     if (T < UP) {
       const s = T / UP, e = 1 - (1 - s) * (1 - s);
       p.x = D.fx + (D.tx - D.fx) * e;
       p.z = D.fz + (D.tz - D.fz) * e;
       p.y = 1.05 * Math.sin(s * Math.PI / 2);
-      if (!D.blockChecked && s > 0.6) {
+      if (!D.slammed && s >= DUNK_SLAM && D.blockChecked) slamDunk(p, D);
+      if (!D.blockChecked && s > 0.55) {
         D.blockChecked = true;
         for (const o of teams[1 - p.team]) {
           if (hyp(o.x - p.x, o.z - p.z) < 1.25 && o.y > 0.3) {
@@ -535,21 +538,24 @@
         }
       }
     } else if (T < UP + HANG) {
-      if (!D.slammed) {
-        D.slammed = true;
-        ball.holder = null; ball.state = 'free';
-        ball.x = D.hp.x; ball.z = D.hp.z; ball.y = HOOP_Y + 0.22;
-        ball.vx = 0; ball.vz = 0; ball.vy = -4.5;
-        ball.shot = { team: p.team, hoop: D.hi, points: 2, shooter: p, dunk: true, scored: false, type: D.type };
-        ball.ignore = p; ball.ignoreT = 1.0; ball.lastTeam = p.team; ball.pass = null;
-        D.hp.shake = 1; game.shake = 0.4;
-        sfx.dunk();
-      }
+      if (!D.slammed) slamDunk(p, D);
       p.x = D.tx; p.z = D.tz;
-      p.y = 1.0 - (T - UP) * 0.2;
+      p.y = 1.05 - (T - UP) * 0.25;
     } else {
       p.state = 'air'; p.vy = 0; p.vx = D.hp.dir * 0.8; p.vz = 0; p.dunk = null;
     }
+  }
+
+  function slamDunk(p, D) {
+    D.slammed = true;
+    // the ball is already just above the rim (see positionHeldBall), so it goes straight down through
+    ball.holder = null; ball.state = 'free';
+    ball.x = D.hp.x; ball.z = D.hp.z; ball.y = Math.max(ball.y, HOOP_Y + 0.13);
+    ball.vx = 0; ball.vz = 0; ball.vy = -7.5;
+    ball.shot = { team: p.team, hoop: D.hi, points: 2, shooter: p, dunk: true, scored: false, type: D.type };
+    ball.ignore = p; ball.ignoreT = 1.0; ball.lastTeam = p.team; ball.pass = null;
+    D.hp.shake = 1; game.shake = 0.4;
+    sfx.dunk();
   }
 
   function passTo(p, r) {
@@ -740,8 +746,10 @@
     }
     // rim (circle of radius RIM_R at HOOP_Y)
     const dx = ball.x - hp.x, dz = ball.z - hp.z;
-    const hd = hyp(dx, dz) || 1e-6;
-    const qx = hp.x + dx / hd * RIM_R, qz = hp.z + dz / hd * RIM_R;
+    const hd = hyp(dx, dz);
+    // nearest point on the rim ring (any point works when the ball is dead centre)
+    const ux = hd > 1e-4 ? dx / hd : 1, uz = hd > 1e-4 ? dz / hd : 0;
+    const qx = hp.x + ux * RIM_R, qz = hp.z + uz * RIM_R;
     const ex = ball.x - qx, ey = ball.y - HOOP_Y, ez = ball.z - qz;
     const d = hyp(ex, ey, ez);
     const minD = BALL_R + 0.012;
@@ -806,12 +814,17 @@
     if (p.state === 'shoot') {
       ball.x = p.x + f * 0.1; ball.y = p.y + p.height * 1.17; ball.z = p.z + 0.05;
     } else if (p.state === 'dunk' && p.dunk) {
-      const s = clamp(p.stateT / 0.5, 0, 1);
+      const s = clamp(p.stateT / (DUNK_UP * DUNK_SLAM), 0, 1);
       const t = p.dunk.type.en;
       let ax = 0.25, ay = 1.12;
       if (t.startsWith('WIND')) { const a = s * Math.PI * 2; ax = Math.sin(a) * 0.55; ay = 0.75 + 0.45 * (1 - Math.cos(a)) / 2 + 0.1; }
       else if (t.startsWith('TOMA')) { ax = -0.25 + 0.6 * s; ay = 1.25 - 0.1 * s; }
-      ball.x = p.x + f * ax; ball.y = p.y + p.height * ay; ball.z = p.z + 0.08;
+      // hand position, blended toward the top of the rim so the slam has no jump
+      const w = clamp((s - 0.45) / 0.55, 0, 1) ** 2;
+      const hp = p.dunk.hp;
+      ball.x = p.x + f * ax + (hp.x - (p.x + f * ax)) * w;
+      ball.y = p.y + p.height * ay + (HOOP_Y + 0.15 - (p.y + p.height * ay)) * w;
+      ball.z = p.z + 0.08 + (hp.z - (p.z + 0.08)) * w;
     } else {
       // dribble
       const spd = hyp(p.vx, p.vz);
@@ -1561,7 +1574,7 @@
     ctx.translate(P.x, P.y);
     ctx.scale(u, u);
     if (p.state === 'dunk' && p.dunk && p.dunk.type.en.startsWith('360')) {
-      const s = clamp(p.stateT / 0.5, 0, 1);
+      const s = clamp(p.stateT / (DUNK_UP * DUNK_SLAM), 0, 1);
       ctx.scale(Math.cos(s * Math.PI * 2), 1);
     }
     const hipY = -0.98 * hs, shY = -1.5 * hs, headY = -1.74 * hs;

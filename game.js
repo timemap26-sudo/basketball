@@ -8,6 +8,13 @@
   const HOOP_Y = 3.05, RIM_R = 0.23, BALL_R = 0.12;
   const G = 9.8;
   const THREE_R = 6.75, CORNER_Z = 6.6;
+  // bonus lines beyond the arc: 4–9 points every 0.8 m, and anything past half court is worth 10
+  const POINT_LINES = [
+    { pts: 4, r: 7.55, color: '#ffe066' }, { pts: 5, r: 8.35, color: '#ffa94d' },
+    { pts: 6, r: 9.15, color: '#ff8fab' }, { pts: 7, r: 9.95, color: '#c792ff' },
+    { pts: 8, r: 10.75, color: '#74c0fc' }, { pts: 9, r: 11.55, color: '#69db7c' },
+  ];
+  const TEN_COLOR = '#ff6b6b';
   const RUN = 5.0, SPRINT = 7.4;
   const SHOT_VY = 3.6, APEX = SHOT_VY / G, SHOT_MAX_T = 0.62;
   const HOOPS = [
@@ -53,13 +60,15 @@
     { en: '540° JAM!', zh: '540 度灌籃' },
     { en: 'CRADLE JAM!', zh: '搖籃灌籃' },
     { en: 'ALLEY-OOP!', zh: '空中接力灌籃' },
+    { en: 'SKY WALK!', zh: '飛天灌籃' },
   ];
-  const ALLEY_DUNK = DUNKS[DUNKS.length - 1];
+  const SKY_DUNK = DUNKS[DUNKS.length - 1];
+  const ALLEY_DUNK = DUNKS[DUNKS.length - 2];
   // D dunks are the power ones; S picks a fancy one
   const POWER_DUNKS = [DUNKS[0], DUNKS[2]];
-  const FANCY_DUNKS = DUNKS.filter((d) => !POWER_DUNKS.includes(d) && d !== ALLEY_DUNK);
-  // A + S takes off from as far out as the three-point line
-  const LONG_DUNK_R = 7.6;
+  const FANCY_DUNKS = DUNKS.filter((d) => !POWER_DUNKS.includes(d) && d !== ALLEY_DUNK && d !== SKY_DUNK);
+  // A + S takes off from any distance
+  const LONG_DUNK_R = Infinity; // A + S: fly in from anywhere
   // offensive spots: [distance from hoop, angle] (angle 0 = straight out to the court)
   const SPOTS = [
     [7.3, 0], [7.0, 1.0], [7.0, -1.0], [6.8, 1.42], [6.8, -1.42],
@@ -525,11 +534,20 @@
     reactDefenders(p, 1.9, false);
   }
 
+  function shotPoints(x, z, hi) {
+    const hp = HOOPS[hi];
+    if ((x - MID_X) * hp.dir > 0) return 10; // from beyond half court
+    const d = hyp(hp.x - x, hp.z - z);
+    let pts = d >= THREE_R || Math.abs(z - MID_Z) >= CORNER_Z ? 3 : 2;
+    for (const l of POINT_LINES) if (d >= l.r) pts = l.pts;
+    return pts;
+  }
+
   function releaseShot(p, q) {
     if (ball.holder !== p) return;
     const hi = attackHoop(p.team), hp = HOOPS[hi];
     const d = hyp(hp.x - p.x, hp.z - p.z);
-    const three = d >= THREE_R || Math.abs(p.z - MID_Z) >= CORNER_Z;
+    const pts = shotPoints(p.x, p.z, hi), three = pts >= 3;
     const st = game.stats[p.team];
     st.fga++; if (three) st.tpa++;
     let contest = 0;
@@ -538,10 +556,11 @@
       if (dd < 2.2) contest += (2.2 - dd) / 2.2 * (o.y > 0.15 ? 1.5 : 1);
     }
     contest = Math.min(contest, 1.6);
-    const sigma = (0.022 + 0.0058 * d) * (1 + 3.0 * (1 - q)) * (1 + 0.8 * contest) * (three ? 0.8 : 1);
+    const deep = Math.max(0, d - 7.4);
+    const sigma = (0.022 + 0.0058 * d + 0.016 * deep ** 1.35) * (1 + 3.0 * (1 - q)) * (1 + 0.8 * contest) * (three ? 0.8 : 1);
     let tx = hp.x + gauss() * sigma, tz = hp.z + gauss() * sigma;
     // custom three-point rate: a make is aimed dead centre and can't be blocked, a miss is aimed at the rim
-    const rate = three && !game.demo && !cpuTeam(p.team) ? THREE_OPTS[game.threeIdx] : null;
+    const rate = pts === 3 && !game.demo && !cpuTeam(p.team) ? THREE_OPTS[game.threeIdx] : null;
     const sure = rate != null && Math.random() < rate;
     if (sure) { tx = hp.x; tz = hp.z; }
     else if (rate != null) {
@@ -553,7 +572,7 @@
     ball.holder = null; ball.state = 'free';
     ball.x = rx; ball.y = ry; ball.z = rz;
     ball.vx = (tx - rx) / t; ball.vz = (tz - rz) / t; ball.vy = (HOOP_Y - ry + 0.5 * G * t * t) / t;
-    ball.shot = { team: p.team, hoop: hi, points: three ? 3 : 2, shooter: p, dunk: false, scored: false, sure };
+    ball.shot = { team: p.team, hoop: hi, points: pts, shooter: p, dunk: false, scored: false, sure };
     ball.ignore = p; ball.ignoreT = 0.5; ball.lastTeam = p.team; ball.touchedRim = false; ball.pass = null;
     p.state = 'post'; p.follow = 0.6;
     if (isHuman(p)) {
@@ -597,22 +616,32 @@
     if (ball.holder !== p || p.state !== 'idle' || p.y > 0) return;
     const hi = attackHoop(p.team), hp = HOOPS[hi];
     p.state = 'dunk'; p.stateT = 0; p.vx = p.vz = p.vy = 0;
-    const type = pick(set);
-    // a long take-off flies longer and higher
+    // a long take-off flies longer and soars high in the middle of the flight
     const d = hyp(hp.x - p.x, hp.z - p.z), long = Math.max(0, d - 3.2);
-    const up = DUNK_UP * (1 + long * 0.2), lift = 1.05 + long * 0.13;
+    const type = d > 9 ? SKY_DUNK : pick(set);
+    const up = Math.min(1.7, DUNK_UP * (1 + long * 0.2)), lift = Math.min(1.35, 1.05 + long * 0.13);
+    const arc = clamp((long - 2.5) * 0.25, 0, 3.2);
+    const slam = long > 3 ? 0.93 : DUNK_SLAM;
     if (long > 0.5) {
       floatText('起飛！', p.x, p.height + 1.2, p.z, '#7fe8ff', 28);
       game.shake = Math.max(game.shake, 0.2);
     } else if (set === FANCY_DUNKS) floatText('花式灌籃！', p.x, p.height + 1.2, p.z, '#ff9cf0', 24);
     p.dunk = {
-      hp, hi, type, fx: p.x, fz: p.z, up, lift, long: long > 0.5,
+      hp, hi, type, fx: p.x, fz: p.z, up, lift, arc, slam, dist: d, long: long > 0.5,
       tx: hp.x + hp.dir * 0.5, tz: hp.z + clamp(p.z - hp.z, -1, 1) * 0.25,
       slammed: false, blockChecked: false,
     };
     p.facing = -hp.dir;
     game.stats[p.team].fga++;
     reactDefenders(p, 2.6, true);
+    // on a long flight the defenders waiting under the rim time their jump for the arrival
+    if (long > 3) {
+      for (const o of teams[1 - p.team]) {
+        if (isHuman(o) || o.state !== 'idle' || hyp(o.x - hp.x, o.z - hp.z) > 2.6) continue;
+        const prob = game.demo ? 0.5 : cpuTeam(o.team) ? DIFFS[game.diff].block : 0.5;
+        if (Math.random() < prob) o.jumpAt = Math.max(0.05, up * slam - 0.3 + rand(-0.12, 0.12));
+      }
+    }
   }
 
   // timing of a dunk: rise for DUNK_UP seconds, slam on the way up (no pause at the top), then hang
@@ -620,14 +649,14 @@
   function updateDunk(p, dt) {
     const D = p.dunk, T = p.stateT, HANG = DUNK_HANG;
     if (!D) { p.state = 'air'; return; }
-    const UP = D.up || DUNK_UP, LIFT = D.lift || 1.05;
+    const UP = D.up || DUNK_UP, LIFT = D.lift || 1.05, SLAM = D.slam || DUNK_SLAM;
     if (T < UP) {
       const s = T / UP, e = 1 - (1 - s) * (1 - s);
       p.x = D.fx + (D.tx - D.fx) * e;
       p.z = D.fz + (D.tz - D.fz) * e;
-      p.y = LIFT * Math.sin(s * Math.PI / 2);
-      if (!D.slammed && s >= DUNK_SLAM && D.blockChecked) slamDunk(p, D);
-      if (!D.blockChecked && s > 0.55) {
+      p.y = LIFT * Math.sin(s * Math.PI / 2) + (D.arc || 0) * Math.sin(s * Math.PI);
+      if (!D.slammed && s >= SLAM && D.blockChecked) slamDunk(p, D);
+      if (!D.blockChecked && s > SLAM - 0.25) {
         D.blockChecked = true;
         for (const o of teams[1 - p.team]) {
           if (hyp(o.x - p.x, o.z - p.z) < 1.25 && o.y > 0.3) {
@@ -658,7 +687,7 @@
     ball.holder = null; ball.state = 'free';
     ball.x = D.hp.x; ball.z = D.hp.z; ball.y = Math.max(ball.y, HOOP_Y + 0.13);
     ball.vx = 0; ball.vz = 0; ball.vy = -7.5;
-    ball.shot = { team: p.team, hoop: D.hi, points: 2, shooter: p, dunk: true, scored: false, type: D.type };
+    ball.shot = { team: p.team, hoop: D.hi, points: 2, shooter: p, dunk: true, scored: false, type: D.type, dist: D.dist || 0 };
     ball.ignore = p; ball.ignoreT = 1.0; ball.lastTeam = p.team; ball.pass = null;
     D.hp.shake = 1; game.shake = 0.4;
     sfx.dunk();
@@ -827,7 +856,7 @@
     game.score[team] += pts;
     game.lastScoreTeam = team;
     const st = game.stats[team];
-    if (shot) { st.fgm++; if (pts === 3) st.tpm++; if (shot.dunk) st.dunks++; shot.scored = true; }
+    if (shot) { st.fgm++; if (pts >= 3) st.tpm++; if (shot.dunk) st.dunks++; shot.scored = true; }
     else ball.shot = { team, hoop: hi, points: 2, scored: true };
     hp.net = 1;
     ball.vx *= 0.15; ball.vz *= 0.15; ball.vy = Math.min(ball.vy, -1.2);
@@ -835,8 +864,14 @@
     const name = shot && shot.shooter ? shot.shooter.name : TEAMS[team].name;
     floatText(`+${pts}`, hp.x, HOOP_Y + 0.6, hp.z, TEAMS[team].light, 40);
     if (shot && shot.dunk) {
-      banner(shot.type.en, `${name} ${shot.type.zh}！+2`, '#ffd54a', 1.8);
+      const far = shot.dist > 4 ? `（${shot.dist.toFixed(1)} 公尺起飛）` : '';
+      banner(shot.type.en, `${name} ${shot.type.zh}！+2${far}`, '#ffd54a', 1.8);
       sfx.cheer(true);
+    } else if (pts >= 4) {
+      const c = pts === 10 ? TEN_COLOR : POINT_LINES.find((l) => l.pts === pts).color;
+      banner(pts === 10 ? '10 POINTS!!!' : `${pts} POINTS!`, `${name} ${pts === 10 ? '半場外超遠命中！' : `${pts} 分球命中！`}`, c, 2.0);
+      sfx.swish(); sfx.cheer(true);
+      game.shake = Math.max(game.shake, pts >= 8 ? 0.35 : 0.2);
     } else if (pts === 3) {
       banner('3 POINTS!', `${name} 三分命中！`, '#5dff7a', 1.6);
       sfx.swish(); sfx.cheer(true);
@@ -1006,7 +1041,7 @@
     if (p.state === 'shoot') {
       ball.x = p.x + f * 0.1; ball.y = p.y + p.height * 1.06; ball.z = p.z + 0.05;
     } else if (p.state === 'dunk' && p.dunk) {
-      const s = clamp(p.stateT / ((p.dunk.up || DUNK_UP) * DUNK_SLAM), 0, 1);
+      const s = clamp(p.stateT / ((p.dunk.up || DUNK_UP) * (p.dunk.slam || DUNK_SLAM)), 0, 1);
       const t = p.dunk.type.en;
       let ax = 0.25, ay = 1.12;
       if (t.includes('WIND')) { const a = s * Math.PI * 2; ax = Math.sin(a) * 0.55; ay = 0.75 + 0.45 * (1 - Math.cos(a)) / 2 + 0.1; }
@@ -1283,6 +1318,8 @@
       p.aiT = rand(0.18, 0.34);
       const sc = game.shotClock;
       if (front && d < 2.9 && Math.random() < 0.8) return startDunk(p);
+      if (front && d > 4 && d < 13 && no.d > 2.2 && Math.random() < 0.04) return startDunk(p, FANCY_DUNKS);
+      if (d > 7.55 && d < 11.6 && no.d > 2.6 && Math.random() < 0.05) return aiShoot(p);
       if (front && d < 4.0 && no.d > 1.1 && Math.random() < 0.3) return aiShoot(p);
       if (three && d < 8.4 && no.d > (p.plan === 'three' ? 1.15 : 1.8) && Math.random() < (p.plan === 'three' ? 0.5 : 0.2)) return aiShoot(p);
       if (!three && d > 3.5 && no.d > 1.7 && Math.random() < 0.18) return aiShoot(p);
@@ -1433,7 +1470,7 @@
       const hp = HOOPS[attackHoop(p.team)], d = hyp(hp.x - p.x, hp.z - p.z);
       const front = (p.x - hp.x) * hp.dir > -0.1;
       if (canDunk(p) || (sprint && front && d <= LONG_DUNK_R)) startDunk(p, FANCY_DUNKS);
-      else floatText(sprint ? '太遠了，三分線內才能起飛' : '靠近籃框，或按住 A 從三分線起飛', p.x, p.height + 0.9, p.z, '#c9d3ea', 16);
+      else floatText(sprint ? '要面向籃框才能起飛' : '靠近籃框，或按住 A 從任何地方起飛', p.x, p.height + 0.9, p.z, '#c9d3ea', 16);
     }
     // Space: crossover
     if (inp.hit('cross') && hasBall) crossover(p, ax);
@@ -1732,7 +1769,7 @@
       bn: game.banner ? { text: game.banner.text, sub: game.banner.sub, color: game.banner.color, t: r2(game.banner.t), dur: game.banner.dur } : null,
       tx: game.texts.map((t) => [t.text, r2(t.x), r2(t.y), r2(t.z), t.color, t.size, r2(t.t)]),
       p: players.map((p) => [r2(p.x), r2(p.y), r2(p.z), r2(p.vx), r2(p.vz), p.facing, STATES.indexOf(p.state),
-        r2(p.stateT), r2(p.runPhase), r2(p.follow), r2(p.reachT), p.dunk ? DUNKS.indexOf(p.dunk.type) : -1, p.userShot ? 1 : 0, p.dunk ? r2(p.dunk.up || DUNK_UP) : 0]),
+        r2(p.stateT), r2(p.runPhase), r2(p.follow), r2(p.reachT), p.dunk ? DUNKS.indexOf(p.dunk.type) : -1, p.userShot ? 1 : 0, p.dunk ? r2(p.dunk.up || DUNK_UP) : 0, p.dunk ? r2(p.dunk.slam || DUNK_SLAM) : 0]),
       b: [r2(ball.x), r2(ball.y), r2(ball.z), r2(ball.rot), ball.holder ? players.indexOf(ball.holder) : -1],
       h: [r2(HOOPS[0].shake), r2(HOOPS[0].net), r2(HOOPS[1].shake), r2(HOOPS[1].net)],
       c: ctrl.map((p) => (p ? players.indexOf(p) : -1)),
@@ -1756,7 +1793,7 @@
         if (!p) return;
         p.nx = a[0]; p.ny = a[1]; p.nz = a[2]; p.vx = a[3]; p.vz = a[4]; p.facing = a[5] < 0 ? -1 : 1;
         p.state = STATES[a[6]] || 'idle'; p.stateT = a[7]; p.runPhase = a[8]; p.follow = a[9]; p.reachT = a[10];
-        p.dunk = a[11] >= 0 && DUNKS[a[11]] ? { type: DUNKS[a[11]], hp: HOOPS[attackHoop(p.team)], up: a[13] || DUNK_UP } : null;
+        p.dunk = a[11] >= 0 && DUNKS[a[11]] ? { type: DUNKS[a[11]], hp: HOOPS[attackHoop(p.team)], up: a[13] || DUNK_UP, slam: a[14] || DUNK_SLAM } : null;
         p.userShot = !!a[12];
       });
       const b = m.b;
@@ -2194,6 +2231,46 @@
       const r0 = D > 0 ? -Math.PI / 2 : Math.PI / 2, r1 = D > 0 ? Math.PI / 2 : Math.PI * 1.5;
       polyLine(arcPts(hp.x, hp.z, 1.25, r0, r1, 16));
     }
+    drawPointLines();
+    ctx.strokeStyle = 'rgba(255,255,255,0.92)'; ctx.lineWidth = 2.6;
+  }
+
+  // the 4–9 point arcs (clipped at the sidelines) with floor labels; 10 points = past half court
+  function drawPointLines() {
+    const label = (txt, x, z, color) => {
+      const q = proj(x, 0, z);
+      ctx.save();
+      ctx.translate(q.x, q.y); ctx.scale(1, 0.55);
+      ctx.font = font(Math.round(22 * q.k), 900); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(60,30,10,0.45)'; ctx.strokeText(txt, 0, 0);
+      ctx.fillStyle = color; ctx.fillText(txt, 0, 0);
+      ctx.restore();
+    };
+    HOOPS.forEach((hp, hi) => {
+      const D = hp.dir;
+      // labels for the left hoop sit on the near side, for the right hoop on the far side, so they never overlap
+      const lz = hi === 0 ? COURT_W - 1.3 : 1.3;
+      ctx.lineWidth = 2.2;
+      ctx.setLineDash([10, 7]);
+      for (const l of POINT_LINES) {
+        const amax = l.r > MID_Z ? Math.asin(MID_Z / l.r) : Math.PI / 2;
+        const a0 = D > 0 ? -amax : Math.PI + amax, a1 = D > 0 ? amax : Math.PI - amax;
+        ctx.strokeStyle = l.color;
+        polyLine(arcPts(hp.x, hp.z, l.r, a0, a1, 48));
+      }
+      ctx.setLineDash([]);
+      // labels just outside each line
+      const dz = lz - hp.z;
+      label('3分', hp.x + D * Math.sqrt(Math.max(0, (THREE_R + 0.4) ** 2 - dz * dz)), lz, '#ffffff');
+      for (const l of POINT_LINES) {
+        const r = l.r + 0.4;
+        label(`${l.pts}分`, hp.x + D * Math.sqrt(Math.max(0, r * r - dz * dz)), lz, l.color);
+      }
+      label('10分', MID_X - D * 1.1, lz, TEN_COLOR);
+    });
+    // half court line glows as the 10-point line
+    ctx.strokeStyle = TEN_COLOR; ctx.lineWidth = 3.5;
+    polyLine([[MID_X, 0], [MID_X, COURT_W]]);
   }
 
   function rimPts(hp, n = 20) {
@@ -2417,7 +2494,7 @@
     if (p.state === 'dunk' && p.dunk) {
       const t = p.dunk.type.en, turns = t.includes('360') ? 1 : t.includes('540') ? 1.5 : 0;
       if (turns) {
-        const s = clamp(p.stateT / ((p.dunk.up || DUNK_UP) * DUNK_SLAM), 0, 1);
+        const s = clamp(p.stateT / ((p.dunk.up || DUNK_UP) * (p.dunk.slam || DUNK_SLAM)), 0, 1);
         ctx.scale(Math.cos(s * Math.PI * 2 * turns), 1);
       }
     }
@@ -2499,6 +2576,17 @@
       ctx.font = font(13); ctx.fillStyle = '#fff'; ctx.textBaseline = 'bottom';
       ctx.fillText(p.name, tp.x, tp.y - 12);
       if (mine && p.state === 'shoot' && p.userShot && hasBall) drawMeter(p);
+      if (mine && hasBall && p.state === 'idle') {
+        const pts = shotPoints(p.x, p.z, attackHoop(p.team));
+        if (pts >= 3) {
+          const c = pts === 10 ? TEN_COLOR : pts === 3 ? '#ffffff' : POINT_LINES.find((l) => l.pts === pts).color;
+          const bx = tp.x, by = tp.y - 40;
+          ctx.font = font(13, 900); ctx.textBaseline = 'middle';
+          const w = ctx.measureText(`${pts}分`).width + 14;
+          ctx.fillStyle = 'rgba(8,10,20,0.75)'; rrect(bx - w / 2, by - 10, w, 20, 10); ctx.fill();
+          ctx.fillStyle = c; ctx.fillText(`${pts}分`, bx, by + 1);
+        }
+      }
     }
   }
 
@@ -2768,7 +2856,7 @@
     ctx.textAlign = 'center';
     const rows = [
       ['投籃命中', (s) => `${s.fgm}/${s.fga}`],
-      ['三分命中', (s) => `${s.tpm}/${s.tpa}`],
+      ['三分以上命中', (s) => `${s.tpm}/${s.tpa}`],
       ['灌籃', (s) => `${s.dunks}`],
       ['火鍋', (s) => `${s.blocks}`],
       ['抄截', (s) => `${s.steals}`],

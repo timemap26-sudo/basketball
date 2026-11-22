@@ -157,10 +157,10 @@
   // Input
   // =====================================================================
   const KEYMAP = {
-    // right hand moves with the arrow keys, left hand plays on A / S / W / D / E
+    // right hand moves with the arrow keys, left hand plays on A / S / W / D / E / R
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     KeyA: 'sprint', ShiftLeft: 'sprint', ShiftRight: 'sprint',
-    KeyW: 'jump', KeyD: 'shoot', KeyS: 'fancy', KeyE: 'pass', Space: 'cross',
+    KeyW: 'jump', KeyD: 'shoot', KeyS: 'fancy', KeyR: 'pass', KeyE: 'switch', Space: 'cross',
     KeyP: 'pause', Escape: 'pause', Enter: 'start', KeyM: 'mute',
   };
   const input = {
@@ -213,7 +213,7 @@
   window.addEventListener('blur', () => { for (const a of [...input.down]) input.release(a); });
 
   // the online opponent's controls, fed by network messages (host side)
-  const NET_ACTS = new Set(['up', 'down', 'left', 'right', 'sprint', 'shoot', 'jump', 'pass', 'cross', 'fancy']);
+  const NET_ACTS = new Set(['up', 'down', 'left', 'right', 'sprint', 'shoot', 'jump', 'pass', 'switch', 'cross', 'fancy']);
   const remoteInput = {
     ax: 0, az: 0, down: new Set(), pressed: new Set(), released: new Set(), held: null,
     isDown(a) { return this.down.has(a); },
@@ -276,8 +276,13 @@
       e.preventDefault(); sfx.init(); b.setPointerCapture(e.pointerId); b.classList.add('down');
       if (act === 'shoot' && game.mode !== 'play') input.press('start');
       input.press(act);
+      if (act === 'pass') input.press('switch'); // one phone button for pass / switch
     });
-    const up = () => { b.classList.remove('down'); input.release(act); if (act === 'shoot') input.release('start'); };
+    const up = () => {
+      b.classList.remove('down'); input.release(act);
+      if (act === 'shoot') input.release('start');
+      if (act === 'pass') input.release('switch');
+    };
     b.addEventListener('pointerup', up);
     b.addEventListener('pointercancel', up);
     b.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -1369,11 +1374,10 @@
       if (inp === remoteInput) inp.held = null;
       if (hasBall && p.state === 'shoot') releaseShot(p, qFromT(held));
     }
-    // E: pass with the ball, otherwise switch to the man nearest the ball
-    if (inp.hit('pass')) {
-      if (hasBall && p.state === 'idle') passTo(p, pickPassTarget(p, ax.x, ax.z));
-      else if (!(ball.holder && ball.holder.team === t)) switchPlayer(t);
-    }
+    // R: pass
+    if (inp.hit('pass') && hasBall && p.state === 'idle') passTo(p, pickPassTarget(p, ax.x, ax.z));
+    // E: switch to the man nearest the ball (not while your team has it)
+    if (inp.hit('switch') && !(ball.holder && ball.holder.team === t)) switchPlayer(t);
   }
 
   // =====================================================================
@@ -2604,7 +2608,7 @@
     const online = game.online || !!net.role;
     const show = online ? 0 : game.playTime < 25 ? 1 : 0.45;
     ctx.globalAlpha = show;
-    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· D 投籃/灌籃/抄截 · S 花式灌籃 · A+S 遠距灌籃 · E 傳球/換人 · 空白 晃人 · '
+    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· D 投籃/灌籃/抄截 · S 花式灌籃 · A+S 遠距灌籃 · R 傳球 · E 換人 · 空白 晃人 · '
       + (game.online || net.role ? 'Esc 離開對戰' : 'P 暫停') + ' · M 靜音';
     ctx.font = font(13, 600); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(txt).width + 24;
@@ -2663,7 +2667,7 @@
     ctx.font = font(13, 600); ctx.fillStyle = '#9fb0d0';
     const lines = input.touch
       ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開投籃，籃下灌籃，防守時抄截', '跳躍鍵：籃板 / 蓋帽 · 傳球鍵：傳球 / 換人 · 晃人鍵 · 花式鍵：花式灌籃（開衝刺可從三分線起飛）· 衝刺鍵點一下開關']
-      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'D 投籃（按住，綠區放開）/ 灌籃 / 抄截 · S 花式灌籃 · A+S 三分線起飛灌籃 · E 傳球 / 換人 · 空白 晃人 · Enter 開始'];
+      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'D 投籃（按住，綠區放開）/ 灌籃 / 抄截 · S 花式灌籃 · A+S 三分線起飛灌籃 · R 傳球 · E 換人 · 空白 晃人 · Enter 開始'];
     lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 540 + i * 20));
   }
 

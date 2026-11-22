@@ -47,10 +47,17 @@
     { en: 'TOMAHAWK!', zh: '戰斧灌籃' },
     { en: '360° JAM!', zh: '360 度灌籃' },
     { en: '360° WINDMILL!', zh: '360 度風車灌籃' },
+    { en: 'BETWEEN THE LEGS!', zh: '胯下換手灌籃' },
+    { en: 'REVERSE JAM!', zh: '背後反扣' },
+    { en: 'DOUBLE PUMP!', zh: '空中拉桿灌籃' },
+    { en: '540° JAM!', zh: '540 度灌籃' },
+    { en: 'CRADLE JAM!', zh: '搖籃灌籃' },
   ];
-  // F dunks are the power ones; S picks a fancy one
+  // D dunks are the power ones; S picks a fancy one
   const POWER_DUNKS = [DUNKS[0], DUNKS[2]];
-  const FANCY_DUNKS = [DUNKS[1], DUNKS[3], DUNKS[4]];
+  const FANCY_DUNKS = DUNKS.filter((d) => !POWER_DUNKS.includes(d));
+  // A + S takes off from as far out as the three-point line
+  const LONG_DUNK_R = 7.6;
   // offensive spots: [distance from hoop, angle] (angle 0 = straight out to the court)
   const SPOTS = [
     [7.3, 0], [7.0, 1.0], [7.0, -1.0], [6.8, 1.42], [6.8, -1.42],
@@ -150,10 +157,10 @@
   // Input
   // =====================================================================
   const KEYMAP = {
-    // right hand moves with the arrow keys, left hand plays on A / S / W / F / Z
+    // right hand moves with the arrow keys, left hand plays on A / S / W / D / E
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     KeyA: 'sprint', ShiftLeft: 'sprint', ShiftRight: 'sprint',
-    KeyW: 'jump', KeyF: 'shoot', KeyS: 'fancy', KeyZ: 'pass', Space: 'cross',
+    KeyW: 'jump', KeyD: 'shoot', KeyS: 'fancy', KeyE: 'pass', Space: 'cross',
     KeyP: 'pause', Escape: 'pause', Enter: 'start', KeyM: 'mute',
   };
   const input = {
@@ -581,9 +588,15 @@
     const hi = attackHoop(p.team), hp = HOOPS[hi];
     p.state = 'dunk'; p.stateT = 0; p.vx = p.vz = p.vy = 0;
     const type = pick(set);
-    if (set === FANCY_DUNKS) floatText('花式灌籃！', p.x, p.height + 1.2, p.z, '#ff9cf0', 24);
+    // a long take-off flies longer and higher
+    const d = hyp(hp.x - p.x, hp.z - p.z), long = Math.max(0, d - 3.2);
+    const up = DUNK_UP * (1 + long * 0.2), lift = 1.05 + long * 0.13;
+    if (long > 0.5) {
+      floatText('起飛！', p.x, p.height + 1.2, p.z, '#7fe8ff', 28);
+      game.shake = Math.max(game.shake, 0.2);
+    } else if (set === FANCY_DUNKS) floatText('花式灌籃！', p.x, p.height + 1.2, p.z, '#ff9cf0', 24);
     p.dunk = {
-      hp, hi, type, fx: p.x, fz: p.z,
+      hp, hi, type, fx: p.x, fz: p.z, up, lift, long: long > 0.5,
       tx: hp.x + hp.dir * 0.5, tz: hp.z + clamp(p.z - hp.z, -1, 1) * 0.25,
       slammed: false, blockChecked: false,
     };
@@ -595,13 +608,14 @@
   // timing of a dunk: rise for DUNK_UP seconds, slam on the way up (no pause at the top), then hang
   const DUNK_UP = 0.42, DUNK_SLAM = 0.8, DUNK_HANG = 0.32;
   function updateDunk(p, dt) {
-    const D = p.dunk, T = p.stateT, UP = DUNK_UP, HANG = DUNK_HANG;
+    const D = p.dunk, T = p.stateT, HANG = DUNK_HANG;
     if (!D) { p.state = 'air'; return; }
+    const UP = D.up || DUNK_UP, LIFT = D.lift || 1.05;
     if (T < UP) {
       const s = T / UP, e = 1 - (1 - s) * (1 - s);
       p.x = D.fx + (D.tx - D.fx) * e;
       p.z = D.fz + (D.tz - D.fz) * e;
-      p.y = 1.05 * Math.sin(s * Math.PI / 2);
+      p.y = LIFT * Math.sin(s * Math.PI / 2);
       if (!D.slammed && s >= DUNK_SLAM && D.blockChecked) slamDunk(p, D);
       if (!D.blockChecked && s > 0.55) {
         D.blockChecked = true;
@@ -622,7 +636,7 @@
     } else if (T < UP + HANG) {
       if (!D.slammed) slamDunk(p, D);
       p.x = D.tx; p.z = D.tz;
-      p.y = 1.05 - (T - UP) * 0.25;
+      p.y = LIFT - (T - UP) * 0.25;
     } else {
       p.state = 'air'; p.vy = 0; p.vx = D.hp.dir * 0.8; p.vz = 0; p.dunk = null;
     }
@@ -921,11 +935,15 @@
     if (p.state === 'shoot') {
       ball.x = p.x + f * 0.1; ball.y = p.y + p.height * 1.06; ball.z = p.z + 0.05;
     } else if (p.state === 'dunk' && p.dunk) {
-      const s = clamp(p.stateT / (DUNK_UP * DUNK_SLAM), 0, 1);
+      const s = clamp(p.stateT / ((p.dunk.up || DUNK_UP) * DUNK_SLAM), 0, 1);
       const t = p.dunk.type.en;
       let ax = 0.25, ay = 1.12;
       if (t.includes('WIND')) { const a = s * Math.PI * 2; ax = Math.sin(a) * 0.55; ay = 0.75 + 0.45 * (1 - Math.cos(a)) / 2 + 0.1; }
       else if (t.startsWith('TOMA')) { ax = -0.25 + 0.6 * s; ay = 1.25 - 0.1 * s; }
+      else if (t.startsWith('BETWEEN')) { const a = Math.sin(Math.min(1, s * 1.6) * Math.PI); ax = 0.25 - 0.3 * a; ay = 1.0 - 0.7 * a; }
+      else if (t.startsWith('REVERSE')) { ax = -0.35 + 0.3 * s; ay = 1.32; }
+      else if (t.startsWith('DOUBLE')) { ax = 0.2; ay = 1.15 - 0.45 * Math.sin(Math.min(1, s * 1.5) * Math.PI); }
+      else if (t.startsWith('CRADLE')) { const a = Math.sin(Math.min(1, s * 1.4) * Math.PI); ax = 0.25 + 0.3 * a; ay = 1.0 - 0.35 * a; }
       // hand position, blended toward the top of the rim so the slam has no jump
       const w = clamp((s - 0.45) / 0.55, 0, 1) ** 2;
       const hp = p.dunk.hp;
@@ -1334,9 +1352,12 @@
       } else if (!hasBall && ball.holder && ball.holder.team !== p.team) trySteal(p);
     }
     // S: fancy dunk (only close enough to the rim)
+    // A + S: take off from as far out as the three-point line
     if (inp.hit('fancy') && hasBall && p.state === 'idle' && p.y === 0) {
-      if (canDunk(p)) startDunk(p, FANCY_DUNKS);
-      else if (isHuman(p)) floatText('靠近籃框才能花式灌籃', p.x, p.height + 0.9, p.z, '#c9d3ea', 16);
+      const hp = HOOPS[attackHoop(p.team)], d = hyp(hp.x - p.x, hp.z - p.z);
+      const front = (p.x - hp.x) * hp.dir > -0.1;
+      if (canDunk(p) || (sprint && front && d <= LONG_DUNK_R)) startDunk(p, FANCY_DUNKS);
+      else floatText(sprint ? '太遠了，三分線內才能起飛' : '靠近籃框，或按住 A 從三分線起飛', p.x, p.height + 0.9, p.z, '#c9d3ea', 16);
     }
     // Space: crossover
     if (inp.hit('cross') && hasBall) crossover(p, ax);
@@ -1348,7 +1369,7 @@
       if (inp === remoteInput) inp.held = null;
       if (hasBall && p.state === 'shoot') releaseShot(p, qFromT(held));
     }
-    // Z: pass with the ball, otherwise switch to the man nearest the ball
+    // E: pass with the ball, otherwise switch to the man nearest the ball
     if (inp.hit('pass')) {
       if (hasBall && p.state === 'idle') passTo(p, pickPassTarget(p, ax.x, ax.z));
       else if (!(ball.holder && ball.holder.team === t)) switchPlayer(t);
@@ -1634,7 +1655,7 @@
       bn: game.banner ? { text: game.banner.text, sub: game.banner.sub, color: game.banner.color, t: r2(game.banner.t), dur: game.banner.dur } : null,
       tx: game.texts.map((t) => [t.text, r2(t.x), r2(t.y), r2(t.z), t.color, t.size, r2(t.t)]),
       p: players.map((p) => [r2(p.x), r2(p.y), r2(p.z), r2(p.vx), r2(p.vz), p.facing, STATES.indexOf(p.state),
-        r2(p.stateT), r2(p.runPhase), r2(p.follow), r2(p.reachT), p.dunk ? DUNKS.indexOf(p.dunk.type) : -1, p.userShot ? 1 : 0]),
+        r2(p.stateT), r2(p.runPhase), r2(p.follow), r2(p.reachT), p.dunk ? DUNKS.indexOf(p.dunk.type) : -1, p.userShot ? 1 : 0, p.dunk ? r2(p.dunk.up || DUNK_UP) : 0]),
       b: [r2(ball.x), r2(ball.y), r2(ball.z), r2(ball.rot), ball.holder ? players.indexOf(ball.holder) : -1],
       h: [r2(HOOPS[0].shake), r2(HOOPS[0].net), r2(HOOPS[1].shake), r2(HOOPS[1].net)],
       c: ctrl.map((p) => (p ? players.indexOf(p) : -1)),
@@ -1658,7 +1679,7 @@
         if (!p) return;
         p.nx = a[0]; p.ny = a[1]; p.nz = a[2]; p.vx = a[3]; p.vz = a[4]; p.facing = a[5] < 0 ? -1 : 1;
         p.state = STATES[a[6]] || 'idle'; p.stateT = a[7]; p.runPhase = a[8]; p.follow = a[9]; p.reachT = a[10];
-        p.dunk = a[11] >= 0 && DUNKS[a[11]] ? { type: DUNKS[a[11]], hp: HOOPS[attackHoop(p.team)] } : null;
+        p.dunk = a[11] >= 0 && DUNKS[a[11]] ? { type: DUNKS[a[11]], hp: HOOPS[attackHoop(p.team)], up: a[13] || DUNK_UP } : null;
         p.userShot = !!a[12];
       });
       const b = m.b;
@@ -2316,9 +2337,12 @@
     ctx.save();
     ctx.translate(P.x, P.y);
     ctx.scale(u, u);
-    if (p.state === 'dunk' && p.dunk && p.dunk.type.en.includes('360')) {
-      const s = clamp(p.stateT / (DUNK_UP * DUNK_SLAM), 0, 1);
-      ctx.scale(Math.cos(s * Math.PI * 2), 1);
+    if (p.state === 'dunk' && p.dunk) {
+      const t = p.dunk.type.en, turns = t.includes('360') ? 1 : t.includes('540') ? 1.5 : 0;
+      if (turns) {
+        const s = clamp(p.stateT / ((p.dunk.up || DUNK_UP) * DUNK_SLAM), 0, 1);
+        ctx.scale(Math.cos(s * Math.PI * 2 * turns), 1);
+      }
     }
     // chibi proportions: big head, short round body
     const hipY = -0.6 * hs + bob, shY = -1.1 * hs + bob;
@@ -2580,7 +2604,7 @@
     const online = game.online || !!net.role;
     const show = online ? 0 : game.playTime < 25 ? 1 : 0.45;
     ctx.globalAlpha = show;
-    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· F 投籃/灌籃/抄截 · S 花式灌籃 · Z 傳球/換人 · 空白 晃人 · '
+    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· D 投籃/灌籃/抄截 · S 花式灌籃 · A+S 遠距灌籃 · E 傳球/換人 · 空白 晃人 · '
       + (game.online || net.role ? 'Esc 離開對戰' : 'P 暫停') + ' · M 靜音';
     ctx.font = font(13, 600); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(txt).width + 24;
@@ -2638,8 +2662,8 @@
 
     ctx.font = font(13, 600); ctx.fillStyle = '#9fb0d0';
     const lines = input.touch
-      ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開投籃，籃下灌籃，防守時抄截', '跳躍鍵：籃板 / 蓋帽 · 傳球鍵：傳球 / 換人 · 晃人鍵 · 花式鍵：籃下花式灌籃 · 衝刺鍵點一下開關']
-      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'F 投籃（按住，綠區放開）/ 灌籃 / 抄截 · S 花式灌籃 · Z 傳球 / 換人 · 空白 晃人 · Enter 開始'];
+      ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開投籃，籃下灌籃，防守時抄截', '跳躍鍵：籃板 / 蓋帽 · 傳球鍵：傳球 / 換人 · 晃人鍵 · 花式鍵：花式灌籃（開衝刺可從三分線起飛）· 衝刺鍵點一下開關']
+      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'D 投籃（按住，綠區放開）/ 灌籃 / 抄截 · S 花式灌籃 · A+S 三分線起飛灌籃 · E 傳球 / 換人 · 空白 晃人 · Enter 開始'];
     lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 540 + i * 20));
   }
 

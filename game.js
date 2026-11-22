@@ -2416,6 +2416,9 @@
       blob(c);
       return;
     }
+    // sideburns in front of the ear
+    ctx.fillStyle = c;
+    rrect(hx - r * 0.5, hy - r * 0.25, r * 0.13, r * 0.5, r * 0.05); ctx.fill();
     // cap of hair covering the top/back of the head
     const low = p.style === 'buzz' ? 0.08 : 0.0;
     ctx.beginPath();
@@ -2454,36 +2457,49 @@
   }
 
   function drawFace(p, hx, hy, r, mood) {
-    const ex1 = hx + r * 0.22, ex2 = hx + r * 0.66, ey = hy + r * 0.12;
-    // blush
-    ctx.fillStyle = 'rgba(255,110,130,0.45)';
-    ctx.beginPath(); ctx.ellipse(hx + r * 0.08, hy + r * 0.45, r * 0.17, r * 0.1, 0, 0, 6.283); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(hx + r * 0.8, hy + r * 0.45, r * 0.13, r * 0.09, 0, 0, 6.283); ctx.fill();
-    ctx.strokeStyle = '#2a1a14'; ctx.fillStyle = '#2a1a14'; ctx.lineCap = 'round'; ctx.lineWidth = r * 0.09;
+    const ex1 = hx + r * 0.24, ex2 = hx + r * 0.66, ey = hy + r * 0.14;
     const blink = ((game.time + p.blinkPh) % 3.4) < 0.12;
+    ctx.lineCap = 'round';
+    // thick, slightly angled eyebrows give a determined look
+    ctx.strokeStyle = p.hair; ctx.lineWidth = r * 0.11;
+    for (const [ex, sc] of [[ex1, 0.85], [ex2, 1]]) {
+      const lift = mood === 'wow' ? -r * 0.06 : 0;
+      ctx.beginPath();
+      ctx.moveTo(ex - r * 0.13 * sc, ey - r * 0.27 + lift);
+      ctx.lineTo(ex + r * 0.12 * sc, ey - r * 0.21 + lift);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = '#2a1a14'; ctx.fillStyle = '#2a1a14'; ctx.lineWidth = r * 0.08;
     if (mood === 'happy') {
-      for (const ex of [ex1, ex2]) { ctx.beginPath(); ctx.arc(ex, ey + r * 0.06, r * 0.12, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke(); }
+      for (const ex of [ex1, ex2]) { ctx.beginPath(); ctx.arc(ex, ey + r * 0.05, r * 0.1, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke(); }
     } else if (blink) {
-      for (const ex of [ex1, ex2]) { ctx.beginPath(); ctx.moveTo(ex - r * 0.1, ey); ctx.lineTo(ex + r * 0.1, ey); ctx.stroke(); }
+      for (const ex of [ex1, ex2]) { ctx.beginPath(); ctx.moveTo(ex - r * 0.08, ey); ctx.lineTo(ex + r * 0.08, ey); ctx.stroke(); }
     } else {
-      for (const [ex, sc] of [[ex1, 0.9], [ex2, 1]]) {
+      for (const [ex, sc] of [[ex1, 0.85], [ex2, 1]]) {
         ctx.fillStyle = '#2a1a14';
-        ctx.beginPath(); ctx.ellipse(ex, ey, r * 0.12 * sc, r * 0.17 * sc, 0, 0, 6.283); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(ex, ey, r * 0.085 * sc, r * 0.115 * sc, 0, 0, 6.283); ctx.fill();
         ctx.fillStyle = '#fff';
-        circ(ex + r * 0.04, ey - r * 0.07, r * 0.055 * sc); ctx.fill();
-        circ(ex - r * 0.04, ey + r * 0.06, r * 0.025 * sc); ctx.fill();
+        circ(ex + r * 0.03, ey - r * 0.04, r * 0.03 * sc); ctx.fill();
       }
     }
+    // nose
+    ctx.strokeStyle = 'rgba(80,40,25,0.45)'; ctx.lineWidth = r * 0.05;
+    ctx.beginPath(); ctx.moveTo(hx + r * 0.5, hy + r * 0.2); ctx.lineTo(hx + r * 0.56, hy + r * 0.34); ctx.lineTo(hx + r * 0.48, hy + r * 0.36); ctx.stroke();
     // mouth
-    ctx.strokeStyle = '#7a2b22'; ctx.lineWidth = r * 0.07;
-    const mx = hx + r * 0.48, my = hy + r * 0.5;
+    const mx = hx + r * 0.46, my = hy + r * 0.56;
     if (mood === 'wow') {
-      ctx.fillStyle = '#7a2b22'; ctx.beginPath(); ctx.ellipse(mx, my, r * 0.09, r * 0.12, 0, 0, 6.283); ctx.fill();
+      ctx.fillStyle = '#5a1f18'; ctx.beginPath(); ctx.ellipse(mx, my, r * 0.11, r * 0.11, 0, 0, 6.283); ctx.fill();
     } else if (mood === 'happy') {
-      ctx.fillStyle = '#c0392b';
-      ctx.beginPath(); ctx.arc(mx, my - r * 0.04, r * 0.17, 0, Math.PI); ctx.closePath(); ctx.fill();
+      // big open grin with teeth
+      ctx.fillStyle = '#5a1f18';
+      ctx.beginPath(); ctx.moveTo(mx - r * 0.2, my - r * 0.06); ctx.lineTo(mx + r * 0.2, my - r * 0.08);
+      ctx.quadraticCurveTo(mx + r * 0.02, my + r * 0.24, mx - r * 0.2, my - r * 0.06); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(mx - r * 0.15, my - r * 0.065, r * 0.3, r * 0.06);
     } else {
-      ctx.beginPath(); ctx.arc(mx, my - r * 0.1, r * 0.12, Math.PI * 0.2, Math.PI * 0.8); ctx.stroke();
+      // confident half smile
+      ctx.strokeStyle = '#5a1f18'; ctx.lineWidth = r * 0.065;
+      ctx.beginPath(); ctx.moveTo(mx - r * 0.15, my - r * 0.02); ctx.quadraticCurveTo(mx + r * 0.02, my + r * 0.07, mx + r * 0.17, my - r * 0.07); ctx.stroke();
     }
   }
 
@@ -2550,19 +2566,40 @@
     // back leg + arm
     limb(0, hipY, fb[0], fb[1] - 0.04, [0.06, 0], legW, skinBack);
     shoe(fb[0], fb[1], false);
-    limb(lean, shY + 0.08, hb[0], hb[1], [-0.05, 0.06], 0.12, skinBack);
-    circ(hb[0], hb[1], 0.075); blob(skinBack);
+    circ(lean - 0.2, shY + 0.1, 0.1); blob(skinBack); // shoulder
+    limb(lean - 0.2, shY + 0.1, hb[0], hb[1], [-0.05, 0.06], 0.145, skinBack);
+    circ(hb[0], hb[1], 0.085); blob(skinBack);
     // shorts
     rrect(-0.27 + lean * 0.5, hipY - 0.06, 0.54, 0.27 * hs, 0.09); blob(T.dark);
-    // round jersey body
-    rrect(-0.26 + lean, shY - 0.03, 0.52, hipY - shY + 0.1, 0.17); blob(T.color);
-    ctx.fillStyle = T.light; ctx.fillRect(-0.22 + lean, hipY - 0.03, 0.44, 0.035);
+    // athletic tank top: broad shoulders tapering to the waist
+    {
+      const L = lean, top = shY - 0.02, bot = hipY + 0.07;
+      ctx.beginPath();
+      ctx.moveTo(L - 0.33, top + 0.1);
+      ctx.quadraticCurveTo(L - 0.33, top - 0.02, L - 0.2, top - 0.02);
+      ctx.lineTo(L + 0.2, top - 0.02);
+      ctx.quadraticCurveTo(L + 0.33, top - 0.02, L + 0.33, top + 0.1);
+      ctx.lineTo(L + 0.25, bot - 0.06);
+      ctx.quadraticCurveTo(L + 0.25, bot, L + 0.18, bot);
+      ctx.lineTo(L - 0.18, bot);
+      ctx.quadraticCurveTo(L - 0.25, bot, L - 0.25, bot - 0.06);
+      ctx.closePath();
+      blob(T.color);
+      // collar and hem trim
+      ctx.strokeStyle = T.light; ctx.lineWidth = 0.035;
+      ctx.beginPath(); ctx.moveTo(L - 0.1, top); ctx.quadraticCurveTo(L + 0.02, top + 0.12, L + 0.14, top); ctx.stroke();
+      ctx.fillStyle = T.light; ctx.fillRect(L - 0.22, hipY - 0.03, 0.44, 0.035);
+    }
     // front leg
     limb(0.04, hipY, ff[0], ff[1] - 0.04, [0.06, 0], legW, p.skin);
     shoe(ff[0], ff[1], true);
     // a raised front arm goes behind the big head so it never covers the face
     const armUp = hf[1] < headY + headR * 0.3;
-    const frontArm = () => { limb(lean, shY + 0.08, hf[0], hf[1], [-0.05, 0.06], 0.12, p.skin); circ(hf[0], hf[1], 0.08); blob(p.skin); };
+    const frontArm = () => {
+      circ(lean + 0.17, shY + 0.1, 0.105); blob(p.skin); // shoulder
+      limb(lean + 0.17, shY + 0.1, hf[0], hf[1], [-0.05, 0.06], 0.15, p.skin);
+      circ(hf[0], hf[1], 0.09); blob(p.skin);
+    };
     if (armUp) frontArm();
     // head
     const hx = 0.02 + lean * 1.5;

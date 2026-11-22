@@ -35,9 +35,9 @@
       { num: 34, name: '陳羿名', skin: '#8d5524', hair: '#111', style: 'buzz', height: 2.08 },
     ],
     [
-      { num: 3, name: '蕭峰', skin: '#ffdbac', hair: '#3b2414', style: 'flattop', height: 1.9 },
-      { num: 11, name: '陳維祥', skin: '#e0ac69', hair: '#2a2a3a', style: 'swoop', height: 1.98 },
-      { num: 21, name: '王任遠', skin: '#a1665e', hair: '#1a1a1a', style: 'mohawk', height: 2.1 },
+      { num: 3, name: 'Jordan', skin: '#ffdbac', hair: '#3b2414', style: 'flattop', height: 1.9 },
+      { num: 11, name: 'Kobe', skin: '#e0ac69', hair: '#2a2a3a', style: 'swoop', height: 1.98 },
+      { num: 21, name: "O'Neal", skin: '#a1665e', hair: '#1a1a1a', style: 'mohawk', height: 2.1 },
     ],
   ];
   const DIFFS = [

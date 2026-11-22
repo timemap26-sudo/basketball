@@ -149,7 +149,7 @@
     // right hand moves with the arrow keys, left hand plays on A / W / D / Z
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     KeyA: 'sprint', ShiftLeft: 'sprint', ShiftRight: 'sprint',
-    KeyW: 'jump', KeyD: 'shoot', Space: 'shoot', KeyZ: 'pass',
+    KeyW: 'jump', KeyD: 'shoot', KeyZ: 'pass', Space: 'cross',
     KeyP: 'pause', Escape: 'pause', Enter: 'start', KeyM: 'mute',
   };
   const input = {
@@ -202,7 +202,7 @@
   window.addEventListener('blur', () => { for (const a of [...input.down]) input.release(a); });
 
   // the online opponent's controls, fed by network messages (host side)
-  const NET_ACTS = new Set(['up', 'down', 'left', 'right', 'sprint', 'shoot', 'jump', 'pass']);
+  const NET_ACTS = new Set(['up', 'down', 'left', 'right', 'sprint', 'shoot', 'jump', 'pass', 'cross']);
   const remoteInput = {
     ax: 0, az: 0, down: new Set(), pressed: new Set(), released: new Set(), held: null,
     isDown(a) { return this.down.has(a); },
@@ -342,6 +342,7 @@
       lockT: 0, stunT: 0, stealCD: 0, reachT: 0, jumpAt: -1, aiT: 0, spot: [0, 1, 5][idx], spotT: rand(2, 5),
       cutT: 0, driveSide: Math.random() < 0.5 ? 1 : -1, sprint: false, releaseAt: 0, follow: 0,
       dunk: null, plan: 'drive', planT: 0, userShot: false, catchT: 0, blinkPh: rand(0, 4),
+      crossT: 0, crossCD: 0, crossSide: 1,
     };
   }
   const reachOf = (p) => p.height * 1.22 + p.y + (p.y > 0.05 ? 0.15 : 0);
@@ -655,11 +656,35 @@
     sfx.pass();
   }
 
+  // Space: crossover — a hard lateral burst with the ball switching hands; defenders close in front can get shaken
+  const CROSS_DUR = 0.28, CROSS_CD = 0.9;
+  function crossover(p, ax) {
+    if (p.crossCD > 0 || p.state !== 'idle' || p.y > 0 || ball.holder !== p) return;
+    const side = Math.abs(ax.z) > 0.25 ? Math.sign(ax.z) : -p.crossSide;
+    const dir = HOOPS[attackHoop(p.team)].x > p.x ? 1 : -1;
+    p.crossSide = side; p.crossT = CROSS_DUR; p.crossCD = CROSS_CD;
+    p.vz = side * 7.2; p.vx = dir * 2.4 + p.vx * 0.3;
+    sfx.bounce(0.6);
+    let shook = false;
+    for (const o of teams[1 - p.team]) {
+      const dx = o.x - p.x, dz = o.z - p.z, d = hyp(dx, dz);
+      if (d > 2.4 || dx * dir < -0.4 || o.y > 0.3) continue; // only defenders in front, on the ground
+      const ch = (isHuman(p) ? 0.65 : 0.45) * (1 - d / 3);
+      if (Math.random() < ch) {
+        const fall = Math.random() < 0.3;
+        o.stunT = fall ? 1.2 : 0.7; o.vx *= 0.2; o.vz = -side * 1.5;
+        floatText(fall ? '腳踝斷了！' : '晃過！', o.x, o.height + 0.6, o.z, fall ? '#ff6b6b' : '#ffd54a', fall ? 26 : 22);
+        shook = true;
+      }
+    }
+    if (shook) sfx.cheer();
+  }
+
   function trySteal(p) {
     if (p.stealCD > 0 || p.y > 0 || p.state !== 'idle') return;
     p.stealCD = 0.75; p.reachT = 0.25;
     const h = ball.holder;
-    if (!h || h.team === p.team || h.state !== 'idle') return;
+    if (!h || h.team === p.team || h.state !== 'idle' || h.crossT > 0) return;
     const d = hyp(h.x - p.x, h.z - p.z);
     if (d > 1.3) return;
     p.facing = Math.sign(h.x - p.x) || p.facing;
@@ -914,7 +939,7 @@
         if (Math.abs(ball.x - cam.x) < 10 && net.role !== 'guest') sfx.bounce(isHuman(p) ? 0.45 : 0.2);
       }
       ball.x = p.x + f * 0.38 + p.vx * 0.04;
-      ball.z = p.z + 0.14;
+      ball.z = p.z + 0.14 + (p.crossT > 0 ? p.crossSide * 0.25 * Math.sin(p.crossT / CROSS_DUR * Math.PI) : 0);
       ball.y = BALL_R + (handY - BALL_R) * c;
       ball.rot += spd * dt * 3;
     }
@@ -996,6 +1021,8 @@
     if (p.stunT > 0) p.stunT -= dt;
     if (p.stealCD > 0) p.stealCD -= dt;
     if (p.reachT > 0) p.reachT -= dt;
+    if (p.crossCD > 0) p.crossCD -= dt;
+    if (p.crossT > 0) p.crossT -= dt;
     if (p.follow > 0) p.follow -= dt;
     if (p.jumpAt > 0) {
       p.jumpAt -= dt;
@@ -1008,6 +1035,7 @@
       let wx = p.wantVx, wz = p.wantVz;
       if (p.lockT > 0) { wx = 0; wz = 0; }
       if (p.stunT > 0) { wx *= 0.3; wz *= 0.3; }
+      if (p.crossT > 0) { wx = p.vx; wz = p.vz; } // ride out the crossover burst
       const a = 32 * dt;
       p.vx += clamp(wx - p.vx, -a, a);
       p.vz += clamp(wz - p.vz, -a, a);
@@ -1300,6 +1328,8 @@
         if (canDunk(p)) startDunk(p); else startShot(p);
       } else if (!hasBall && ball.holder && ball.holder.team !== p.team) trySteal(p);
     }
+    // Space: crossover
+    if (inp.hit('cross') && hasBall) crossover(p, ax);
     // W: jump for rebounds and blocks
     if (inp.hit('jump') && !hasBall) jump(p, 4.5);
     if (inp.up('shoot')) {
@@ -2540,7 +2570,7 @@
     const online = game.online || !!net.role;
     const show = online ? 0 : game.playTime < 25 ? 1 : 0.45;
     ctx.globalAlpha = show;
-    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· D 投籃/灌籃/抄截 · Z 傳球/換人 · '
+    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· D 投籃/灌籃/抄截 · Z 傳球/換人 · 空白 晃人 · '
       + (game.online || net.role ? 'Esc 離開對戰' : 'P 暫停') + ' · M 靜音';
     ctx.font = font(13, 600); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(txt).width + 24;
@@ -2598,8 +2628,8 @@
 
     ctx.font = font(13, 600); ctx.fillStyle = '#9fb0d0';
     const lines = input.touch
-      ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開投籃，籃下灌籃，防守時抄截', '跳躍鍵：搶籃板 / 蓋帽 · 傳球鍵：傳球 / 換人 · 衝刺鍵點一下開關']
-      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'D 投籃（按住，綠區放開）/ 灌籃 / 抄截 · Z 傳球 / 換人 · Enter 開始'];
+      ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開投籃，籃下灌籃，防守時抄截', '跳躍鍵：搶籃板 / 蓋帽 · 傳球鍵：傳球 / 換人 · 晃人鍵：持球晃過防守 · 衝刺鍵點一下開關']
+      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'D 投籃（按住，綠區放開）/ 灌籃 / 抄截 · Z 傳球 / 換人 · 空白 晃人 · Enter 開始'];
     lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 540 + i * 20));
   }
 

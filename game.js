@@ -560,7 +560,9 @@
     const sigma = (0.022 + 0.0058 * d + 0.016 * deep ** 1.35) * (1 + 3.0 * (1 - q)) * (1 + 0.8 * contest) * (three ? 0.8 : 1);
     let tx = hp.x + gauss() * sigma, tz = hp.z + gauss() * sigma;
     // custom three-point rate: a make is aimed dead centre and can't be blocked, a miss is aimed at the rim
-    const rate = pts === 3 && !game.demo && !cpuTeam(p.team) ? THREE_OPTS[game.threeIdx] : null;
+    // custom rate for your team: applies to the 3-point zone, and at 100% to every line out to 10 points
+    const opt = !game.demo && !cpuTeam(p.team) ? THREE_OPTS[game.threeIdx] : null;
+    const rate = opt != null && (pts === 3 || (opt === 1 && pts >= 3)) ? opt : null;
     const sure = rate != null && Math.random() < rate;
     if (sure) { tx = hp.x; tz = hp.z; }
     else if (rate != null) {
@@ -2829,7 +2831,7 @@
     ctx.fillText('每節長度', VW / 2, y + 222);
     QUARTER_OPTS.forEach((m, i) => button(`${m} 分鐘`, VW / 2 - 230 + i * 118, y + 238, 106, 40, game.qIdx === i, () => { game.qIdx = i; }));
     ctx.font = font(16, 700); ctx.fillStyle = '#e8ecf5';
-    ctx.fillText('三分命中率（100% = 在哪投都進）', VW / 2, y + 304);
+    ctx.fillText('三分命中率（100% = 3～10 分在哪投都進）', VW / 2, y + 304);
     THREE_OPTS.forEach((r, i) => button(r == null ? '預設' : `${Math.round(r * 100)}%`, VW / 2 - 276 + i * 112, y + 320, 100, 40,
       game.threeIdx === i, () => { game.threeIdx = i; }));
     button('開始比賽（對電腦）', VW / 2 - 150, y + 382, 300, 54, true, startGame);

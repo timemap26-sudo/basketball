@@ -30,14 +30,14 @@
   ];
   const ROSTER = [
     [
-      { num: 7, name: '小飛', skin: '#f1c27d', hair: '#2b1b0e', style: 'spiky', height: 1.9 },
-      { num: 23, name: '阿傑', skin: '#c68642', hair: '#1a1a1a', style: 'afro', height: 1.98 },
-      { num: 34, name: '大山', skin: '#8d5524', hair: '#111', style: 'buzz', height: 2.08 },
+      { num: 7, name: '吳家慶', skin: '#f1c27d', hair: '#2b1b0e', style: 'spiky', height: 1.9 },
+      { num: 23, name: '許昭博', skin: '#c68642', hair: '#1a1a1a', style: 'afro', height: 1.98 },
+      { num: 34, name: '陳羿名', skin: '#8d5524', hair: '#111', style: 'buzz', height: 2.08 },
     ],
     [
-      { num: 3, name: '閃電', skin: '#ffdbac', hair: '#8a5a2b', style: 'bun', height: 1.9 },
-      { num: 11, name: '阿浪', skin: '#e0ac69', hair: '#2a2a3a', style: 'swoop', height: 1.98 },
-      { num: 21, name: '巨塔', skin: '#a1665e', hair: '#1a1a1a', style: 'mohawk', height: 2.1 },
+      { num: 3, name: '蕭峰', skin: '#ffdbac', hair: '#3b2414', style: 'flattop', height: 1.9 },
+      { num: 11, name: '陳維祥', skin: '#e0ac69', hair: '#2a2a3a', style: 'swoop', height: 1.98 },
+      { num: 21, name: '王任遠', skin: '#a1665e', hair: '#1a1a1a', style: 'mohawk', height: 2.1 },
     ],
   ];
   const DIFFS = [
@@ -2393,8 +2393,6 @@
         const a = Math.PI * (0.75 + i * 0.19);
         circ(hx - r * 0.1 + Math.cos(a) * r * 0.95, hy - r * 0.15 + Math.sin(a) * r * 0.95, r * 0.42); ctx.fill();
       }
-    } else if (p.style === 'bun') {
-      circ(hx - r * 0.35, hy - r * 1.0, r * 0.38); blob(p.hair);
     }
   }
   // hair on top of the head
@@ -2402,10 +2400,17 @@
     const c = p.hair;
     ctx.fillStyle = c;
     if (p.style === 'mohawk') {
+      // spiky crest running front to back over the top of the head
       ctx.beginPath();
-      ctx.moveTo(hx - r * 0.75, hy - r * 0.55);
-      ctx.quadraticCurveTo(hx - r * 0.2, hy - r * 1.75, hx + r * 0.55, hy - r * 0.8);
-      ctx.quadraticCurveTo(hx, hy - r * 1.05, hx - r * 0.75, hy - r * 0.55);
+      ctx.moveTo(hx - r * 0.85, hy - r * 0.45);
+      const tips = [[-0.78, -1.25], [-0.42, -1.55], [0.0, -1.62], [0.4, -1.45]];
+      const vals = [[-0.6, -0.9], [-0.22, -1.05], [0.18, -1.05], [0.62, -0.85]];
+      for (let i = 0; i < tips.length; i++) {
+        ctx.lineTo(hx + r * tips[i][0], hy + r * tips[i][1]);
+        ctx.lineTo(hx + r * vals[i][0], hy + r * vals[i][1]);
+      }
+      ctx.lineTo(hx + r * 0.55, hy - r * 0.75);
+      ctx.quadraticCurveTo(hx, hy - r * 0.95, hx - r * 0.85, hy - r * 0.45);
       blob(c);
       return;
     }
@@ -2427,6 +2432,14 @@
         ctx.lineTo(tx, ty);
         ctx.lineTo(bx + Math.sin(a) * r * 0.22, by - Math.cos(a) * r * 0.22);
       }
+      blob(c);
+    } else if (p.style === 'flattop') {
+      ctx.beginPath();
+      ctx.moveTo(hx - r * 0.82, hy - r * 0.55);
+      ctx.lineTo(hx - r * 0.72, hy - r * 1.3);
+      ctx.lineTo(hx + r * 0.72, hy - r * 1.3);
+      ctx.lineTo(hx + r * 0.85, hy - r * 0.55);
+      ctx.closePath();
       blob(c);
     } else if (p.style === 'swoop') {
       ctx.beginPath();

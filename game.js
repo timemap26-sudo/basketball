@@ -39,6 +39,8 @@
     { name: '困難', oppSkill: 0.86, steal: 0.4, block: 0.75, lag: 6.0 },
   ];
   const QUARTER_OPTS = [1, 2, 3, 5];
+  // three-point make rate for the human teams' shooters (null = normal, timing-based)
+  const THREE_OPTS = [null, 0.4, 0.6, 0.8, 1];
   const DUNKS = [
     { en: 'SLAM DUNK!', zh: '暴力灌籃' },
     { en: 'WINDMILL!', zh: '風車灌籃' },
@@ -144,10 +146,10 @@
   // Input
   // =====================================================================
   const KEYMAP = {
-    // right hand moves with the arrow keys, left hand plays on the ASDF row
+    // right hand moves with the arrow keys, left hand plays on A / W / D / Z
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
-    ShiftLeft: 'sprint', ShiftRight: 'sprint',
-    KeyD: 'shoot', Space: 'shoot', KeyS: 'pass', KeyA: 'sprint',
+    KeyA: 'sprint', ShiftLeft: 'sprint', ShiftRight: 'sprint',
+    KeyW: 'jump', KeyD: 'shoot', Space: 'shoot', KeyZ: 'pass',
     KeyP: 'pause', Escape: 'pause', Enter: 'start', KeyM: 'mute',
   };
   const input = {
@@ -200,7 +202,7 @@
   window.addEventListener('blur', () => { for (const a of [...input.down]) input.release(a); });
 
   // the online opponent's controls, fed by network messages (host side)
-  const NET_ACTS = new Set(['up', 'down', 'left', 'right', 'sprint', 'shoot', 'pass', 'switch']);
+  const NET_ACTS = new Set(['up', 'down', 'left', 'right', 'sprint', 'shoot', 'jump', 'pass']);
   const remoteInput = {
     ax: 0, az: 0, down: new Set(), pressed: new Set(), released: new Set(), held: null,
     isDown(a) { return this.down.has(a); },
@@ -307,7 +309,7 @@
   const game = {
     mode: 'menu', // menu | play | paused | over
     demo: true,
-    diff: 1, qIdx: 1, quarterLen: 120,
+    diff: 1, qIdx: 1, quarterLen: 120, threeIdx: 0,
     score: [0, 0], quarter: 1, clock: 120, shotClock: 24,
     possession: -1,
     phase: 'live', // live | dead | jump | break
@@ -373,7 +375,7 @@
     teams = [players.filter((p) => p.team === 0), players.filter((p) => p.team === 1)];
     for (let t = 0; t < 2; t++) ctrl[t] = game.humans[t] ? teams[t][2] : null;
     setupJumpBall();
-    if (!demo) banner('跳球！', '按 D / 空白鍵 跳起爭球', '#ffd54a', 1.8);
+    if (!demo) banner('跳球！', '按 W 跳起爭球', '#ffd54a', 1.8);
   }
 
   function setupJumpBall() {
@@ -515,13 +517,21 @@
     }
     contest = Math.min(contest, 1.6);
     const sigma = (0.022 + 0.0058 * d) * (1 + 3.0 * (1 - q)) * (1 + 0.8 * contest) * (three ? 0.8 : 1);
-    const tx = hp.x + gauss() * sigma, tz = hp.z + gauss() * sigma;
+    let tx = hp.x + gauss() * sigma, tz = hp.z + gauss() * sigma;
+    // custom three-point rate: a make is aimed dead centre and can't be blocked, a miss is aimed at the rim
+    const rate = three && !game.demo && !cpuTeam(p.team) ? THREE_OPTS[game.threeIdx] : null;
+    const sure = rate != null && Math.random() < rate;
+    if (sure) { tx = hp.x; tz = hp.z; }
+    else if (rate != null) {
+      const a = Math.random() * Math.PI * 2, off = RIM_R + rand(0.08, 0.2);
+      tx = hp.x + Math.cos(a) * off; tz = hp.z + Math.sin(a) * off;
+    }
     const rx = p.x + p.facing * 0.1, ry = p.y + p.height * 1.06, rz = p.z;
     const t = 0.6 + 0.1 * d;
     ball.holder = null; ball.state = 'free';
     ball.x = rx; ball.y = ry; ball.z = rz;
     ball.vx = (tx - rx) / t; ball.vz = (tz - rz) / t; ball.vy = (HOOP_Y - ry + 0.5 * G * t * t) / t;
-    ball.shot = { team: p.team, hoop: hi, points: three ? 3 : 2, shooter: p, dunk: false, scored: false };
+    ball.shot = { team: p.team, hoop: hi, points: three ? 3 : 2, shooter: p, dunk: false, scored: false, sure };
     ball.ignore = p; ball.ignoreT = 0.5; ball.lastTeam = p.team; ball.touchedRim = false; ball.pass = null;
     p.state = 'post'; p.follow = 0.6;
     if (isHuman(p)) {
@@ -530,7 +540,7 @@
       floatText(label[0], p.x, p.y + p.height + 0.7, p.z, label[1], 22);
     }
     // block at the release point by an airborne defender right in front
-    for (const o of teams[1 - p.team]) {
+    if (!sure) for (const o of teams[1 - p.team]) {
       const dd = hyp(o.x - p.x, o.z - p.z);
       const dot = ((o.x - p.x) * (hp.x - p.x) + (o.z - p.z) * (hp.z - p.z)) / ((dd || 1) * (d || 1));
       if (dd < 1.05 && o.y > 0.2 && dot > -0.3 && reachOf(o) >= ry - 0.15) {
@@ -940,6 +950,7 @@
     for (const p of players) {
       if (p.state === 'dunk' || p.stunT > 0.2) continue;
       if (ball.ignore === p && ball.ignoreT > 0) continue;
+      if (ball.shot && ball.shot.sure && !ball.shot.scored) continue; // a sure three can't be touched in flight
       const hd = hyp(ball.x - p.x, ball.z - p.z);
       let r = 0.58;
       if (ball.pass) {
@@ -1283,27 +1294,25 @@
     }
     if (game.phase === 'break') { p.wantVx = p.wantVz = 0; return; }
 
+    // D: shoot / dunk with the ball, steal on defence
     if (inp.hit('shoot')) {
       if (hasBall && p.state === 'idle' && p.y === 0) {
         if (canDunk(p)) startDunk(p); else startShot(p);
-      } else if (!hasBall) jump(p, 4.5);
+      } else if (!hasBall && ball.holder && ball.holder.team !== p.team) trySteal(p);
     }
+    // W: jump for rebounds and blocks
+    if (inp.hit('jump') && !hasBall) jump(p, 4.5);
     if (inp.up('shoot')) {
       // an online player's release is judged by how long they held the key on their own machine
       const held = inp === remoteInput && inp.held != null ? inp.held : p.stateT;
       if (inp === remoteInput) inp.held = null;
       if (hasBall && p.state === 'shoot') releaseShot(p, qFromT(held));
     }
+    // Z: pass with the ball, otherwise switch to the man nearest the ball
     if (inp.hit('pass')) {
       if (hasBall && p.state === 'idle') passTo(p, pickPassTarget(p, ax.x, ax.z));
-      else if (!hasBall) {
-        // S on defence: steal when the ball handler is in reach, otherwise switch to the man nearest the ball
-        const h = ball.holder;
-        if (h && h.team !== p.team && hyp(h.x - p.x, h.z - p.z) <= 1.3) trySteal(p);
-        else if (!(h && h.team === t)) switchPlayer(t);
-      }
+      else if (!(ball.holder && ball.holder.team === t)) switchPlayer(t);
     }
-    if (inp.hit('switch') && !(ball.holder && ball.holder.team === t)) switchPlayer(t);
   }
 
   // =====================================================================
@@ -2531,7 +2540,7 @@
     const online = game.online || !!net.role;
     const show = online ? 0 : game.playTime < 25 ? 1 : 0.45;
     ctx.globalAlpha = show;
-    const txt = '方向鍵 移動 · A/Shift 衝刺 · D/空白 按住放開投籃（籃下自動灌籃｜防守時蓋帽）· S 傳球/抄截/換人 · '
+    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· D 投籃/灌籃/抄截 · Z 傳球/換人 · '
       + (game.online || net.role ? 'Esc 離開對戰' : 'P 暫停') + ' · M 靜音';
     ctx.font = font(13, 600); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(txt).width + 24;
@@ -2561,7 +2570,7 @@
 
   function drawMenu() {
     menuButtons.length = 0;
-    const W = 640, H = 500, x = VW / 2 - W / 2, y = 120;
+    const W = 640, H = 580, x = VW / 2 - W / 2, y = 70;
     panel(x, y, W, H);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = font(58, 900);
@@ -2577,17 +2586,21 @@
     ctx.font = font(16, 700); ctx.fillStyle = '#e8ecf5';
     ctx.fillText('每節長度', VW / 2, y + 222);
     QUARTER_OPTS.forEach((m, i) => button(`${m} 分鐘`, VW / 2 - 230 + i * 118, y + 238, 106, 40, game.qIdx === i, () => { game.qIdx = i; }));
-    button('開始比賽（對電腦）', VW / 2 - 150, y + 300, 300, 54, true, startGame);
+    ctx.font = font(16, 700); ctx.fillStyle = '#e8ecf5';
+    ctx.fillText('三分命中率（100% = 在哪投都進）', VW / 2, y + 304);
+    THREE_OPTS.forEach((r, i) => button(r == null ? '預設' : `${Math.round(r * 100)}%`, VW / 2 - 276 + i * 112, y + 320, 100, 40,
+      game.threeIdx === i, () => { game.threeIdx = i; }));
+    button('開始比賽（對電腦）', VW / 2 - 150, y + 382, 300, 54, true, startGame);
     ctx.font = font(15, 700); ctx.fillStyle = '#e8ecf5';
-    ctx.fillText('連線對戰（和朋友 1 對 1）', VW / 2, y + 378);
-    button('建立房間', VW / 2 - 150, y + 394, 142, 44, false, hostRoom);
-    button('加入房間', VW / 2 + 8, y + 394, 142, 44, false, () => openJoin(''));
+    ctx.fillText('連線對戰（和朋友 1 對 1）', VW / 2, y + 460);
+    button('建立房間', VW / 2 - 150, y + 476, 142, 44, false, hostRoom);
+    button('加入房間', VW / 2 + 8, y + 476, 142, 44, false, () => openJoin(''));
 
     ctx.font = font(13, 600); ctx.fillStyle = '#9fb0d0';
     const lines = input.touch
-      ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開（綠區出手最準），籃下自動灌籃', '傳球鍵：進攻傳球 / 防守抄截 · 衝刺鍵點一下開關 · 衝刺時灌籃距離更遠']
-      : ['方向鍵 移動 · A/Shift 衝刺 · D/空白 投籃（按住，在綠區放開）· 靠近籃框按 D 灌籃', 'S 傳球（可配合方向選人）/ 防守抄截或換人 · 防守時 D 跳起蓋帽 · Enter 開始'];
-    lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 458 + i * 20));
+      ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開投籃，籃下灌籃，防守時抄截', '跳躍鍵：搶籃板 / 蓋帽 · 傳球鍵：傳球 / 換人 · 衝刺鍵點一下開關']
+      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'D 投籃（按住，綠區放開）/ 灌籃 / 抄截 · Z 傳球 / 換人 · Enter 開始'];
+    lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 540 + i * 20));
   }
 
   function drawPause() {

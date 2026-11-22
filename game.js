@@ -158,10 +158,10 @@
   // Input
   // =====================================================================
   const KEYMAP = {
-    // right hand moves with the arrow keys, left hand plays on Q / A / S / W / D / X
+    // right hand moves with the arrow keys, left hand plays on A / S / W / D / X
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     KeyA: 'sprint', ShiftLeft: 'sprint', ShiftRight: 'sprint',
-    KeyW: 'jump', KeyD: 'shoot', KeyS: 'fancy', KeyX: 'pass', KeyQ: 'steal', Space: 'cross',
+    KeyW: 'jump', KeyD: 'shoot', KeyS: 'fancy', KeyX: 'pass', Space: 'cross',
     KeyP: 'pause', Escape: 'pause', Enter: 'start', KeyM: 'mute',
   };
   const input = {
@@ -1404,7 +1404,8 @@
       }
     }
     // Q: steal
-    if (inp.hit('steal') && !hasBall && ball.holder && ball.holder.team !== p.team) trySteal(p);
+    // S without the ball (or the phone's shoot button): steal
+    if ((inp.hit('steal') || inp.hit('fancy')) && !hasBall && ball.holder && ball.holder.team !== p.team) trySteal(p);
     // S: fancy dunk (only close enough to the rim)
     // A + S: take off from as far out as the three-point line
     if (inp.hit('fancy') && hasBall && p.state === 'idle' && p.y === 0) {
@@ -2657,7 +2658,7 @@
     const online = game.online || !!net.role;
     const show = online ? 0 : game.playTime < 25 ? 1 : 0.45;
     ctx.globalAlpha = show;
-    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· D 投籃/灌籃 · Q 抄截 · S 花式灌籃 · A+S 遠距灌籃 · X 傳球/換人 · 空白 晃人 · '
+    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· D 投籃/灌籃 · S 花式灌籃/抄截 · A+S 遠距灌籃 · X 傳球/換人 · 空白 晃人 · '
       + (game.online || net.role ? 'Esc 離開對戰' : 'P 暫停') + ' · M 靜音';
     ctx.font = font(13, 600); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(txt).width + 24;
@@ -2716,7 +2717,7 @@
     ctx.font = font(13, 600); ctx.fillStyle = '#9fb0d0';
     const lines = input.touch
       ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開投籃，籃下灌籃，防守時抄截', '跳躍鍵：籃板 / 蓋帽 · 傳球鍵：傳球 / 換人 · 晃人鍵 · 花式鍵：花式灌籃（開衝刺可從三分線起飛）· 衝刺鍵點一下開關']
-      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'D 投籃（按住，綠區放開）/ 灌籃 · Q 抄截 · S 花式灌籃 · A+S 三分線起飛灌籃 · X 傳球/換人 · 空白 晃人 · Enter 開始'];
+      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'D 投籃（按住，綠區放開）/ 灌籃 · S 花式灌籃 / 防守抄截 · A+S 三分線起飛灌籃 · X 傳球/換人 · 空白 晃人 · Enter 開始'];
     lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 540 + i * 20));
   }
 

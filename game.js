@@ -52,10 +52,12 @@
     { en: 'DOUBLE PUMP!', zh: '空中拉桿灌籃' },
     { en: '540° JAM!', zh: '540 度灌籃' },
     { en: 'CRADLE JAM!', zh: '搖籃灌籃' },
+    { en: 'ALLEY-OOP!', zh: '空中接力灌籃' },
   ];
+  const ALLEY_DUNK = DUNKS[DUNKS.length - 1];
   // D dunks are the power ones; S picks a fancy one
   const POWER_DUNKS = [DUNKS[0], DUNKS[2]];
-  const FANCY_DUNKS = DUNKS.filter((d) => !POWER_DUNKS.includes(d));
+  const FANCY_DUNKS = DUNKS.filter((d) => !POWER_DUNKS.includes(d) && d !== ALLEY_DUNK);
   // A + S takes off from as far out as the three-point line
   const LONG_DUNK_R = 7.6;
   // offensive spots: [distance from hoop, angle] (angle 0 = straight out to the court)
@@ -158,10 +160,10 @@
   // Input
   // =====================================================================
   const KEYMAP = {
-    // right hand moves with the arrow keys, left hand plays on A / S / W / D / X
+    // right hand moves with the arrow keys, left hand plays on A / S / W / D / X / R
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     KeyA: 'sprint', ShiftLeft: 'sprint', ShiftRight: 'sprint',
-    KeyW: 'jump', KeyD: 'shoot', KeyS: 'fancy', KeyX: 'pass', Space: 'cross',
+    KeyW: 'jump', KeyD: 'shoot', KeyS: 'fancy', KeyX: 'pass', KeyR: 'alley', Space: 'cross',
     KeyP: 'pause', Escape: 'pause', Enter: 'start', KeyM: 'mute',
   };
   const input = {
@@ -214,7 +216,7 @@
   window.addEventListener('blur', () => { for (const a of [...input.down]) input.release(a); });
 
   // the online opponent's controls, fed by network messages (host side)
-  const NET_ACTS = new Set(['up', 'down', 'left', 'right', 'sprint', 'shoot', 'jump', 'pass', 'switch', 'cross', 'fancy', 'steal']);
+  const NET_ACTS = new Set(['up', 'down', 'left', 'right', 'sprint', 'shoot', 'jump', 'pass', 'switch', 'cross', 'fancy', 'steal', 'alley']);
   const remoteInput = {
     ax: 0, az: 0, down: new Set(), pressed: new Set(), released: new Set(), held: null,
     isDown(a) { return this.down.has(a); },
@@ -683,6 +685,63 @@
     sfx.pass();
   }
 
+  // R: alley-oop — lob the ball just above the rim; the teammate nearest the basket runs in, jumps, catches and slams
+  const ALLEY_JUMP_V = 4.4, ALLEY_RISE = ALLEY_JUMP_V / G; // time to the top of the jump
+  function alleyOop(p) {
+    if (ball.holder !== p || p.state !== 'idle' || p.y > 0) return false;
+    const hi = attackHoop(p.team), hp = HOOPS[hi];
+    const mates = teams[p.team].filter((q) => q !== p && q.state !== 'dunk' && q.stunT <= 0);
+    if (!mates.length) return false;
+    const r = mates.sort((a, b) => hyp(a.x - hp.x, a.z - hp.z) - hyp(b.x - hp.x, b.z - hp.z))[0];
+    // catch point: just in front of the rim, a little toward the receiver's side
+    const cx = hp.x + hp.dir * 0.6, cz = hp.z + clamp(r.z - hp.z, -1, 1) * 0.35;
+    const cy = r.height * 1.22 + 0.95; // the receiver's reach at the top of the jump
+    const run = hyp(cx - r.x, cz - r.z);
+    const T = clamp(Math.max(0.75 + hyp(cx - p.x, cz - p.z) * 0.035, run / 8.5 + ALLEY_RISE), 0.8, 1.9);
+    const sx = p.x + p.facing * 0.3, sy = 1.6, sz = p.z;
+    ball.holder = null; ball.state = 'free';
+    ball.x = sx; ball.y = sy; ball.z = sz;
+    ball.vx = (cx - sx) / T; ball.vz = (cz - sz) / T; ball.vy = (cy - sy + 0.5 * G * T * T) / T;
+    ball.pass = { from: p, to: r, risky: false, alley: true }; ball.shot = null;
+    ball.ignore = p; ball.ignoreT = 0.4; ball.lastTeam = p.team;
+    r.alley = { x: cx, z: cz, t: 0, T, jumped: false };
+    p.facing = Math.sign(cx - p.x) || p.facing;
+    p.follow = 0.3;
+    floatText('空中接力！', p.x, p.height + 1.0, p.z, '#7fe8ff', 22);
+    sfx.pass();
+    return true;
+  }
+  // steer the receiver to the catch point and take off so the top of the jump meets the ball
+  function updateAlleyRunner(p, dt) {
+    const A = p.alley;
+    A.t += dt;
+    if (A.t > A.T + 0.6 || ball.holder) { p.alley = null; return; }
+    if (A.jumped) return;
+    const left = A.T - ALLEY_RISE - A.t;
+    const dx = A.x - p.x, dz = A.z - p.z, d = hyp(dx, dz);
+    const sp = left > 0.02 ? Math.min(9, d / left) : 0;
+    p.wantVx = d > 0.05 ? dx / d * sp : 0; p.wantVz = d > 0.05 ? dz / d * sp : 0;
+    if (left <= 0 && p.state === 'idle' && p.y === 0) {
+      A.jumped = true;
+      p.vx = dx / ALLEY_RISE; p.vz = dz / ALLEY_RISE; // drift onto the spot during the rise
+      p.vy = ALLEY_JUMP_V; p.state = 'air'; p.stateT = 0;
+    }
+  }
+  // caught in the air: go straight into the slam, picking the dunk up part-way so nothing jumps
+  function alleyFinish(p) {
+    const hi = attackHoop(p.team), hp = HOOPS[hi];
+    const s0 = 0.6, e = 1 - (1 - s0) * (1 - s0), sinS = Math.sin(s0 * Math.PI / 2);
+    const tx = hp.x + hp.dir * 0.5, tz = hp.z + clamp(p.z - hp.z, -1, 1) * 0.25;
+    p.state = 'dunk'; p.stateT = s0 * DUNK_UP; p.vx = p.vz = p.vy = 0; p.alley = null;
+    p.dunk = {
+      hp, hi, type: ALLEY_DUNK, tx, tz, up: DUNK_UP, lift: Math.max(0.6, p.y / sinS),
+      fx: (p.x - tx * e) / (1 - e), fz: (p.z - tz * e) / (1 - e),
+      slammed: false, blockChecked: true,
+    };
+    p.facing = -hp.dir;
+    game.stats[p.team].fga++;
+  }
+
   // Space: crossover — a hard lateral burst with the ball switching hands; defenders close in front can get shaken
   const CROSS_DUR = 0.28, CROSS_CD = 0.9;
   function crossover(p, ax) {
@@ -1037,6 +1096,7 @@
     const wasShot = ball.shot, wasPass = ball.pass;
     giveTo(best);
     if (wasPass && wasPass.from.team === best.team) best.catchT = 0.7;
+    if (wasPass && wasPass.alley && wasPass.to === best && best.y > 0.25) alleyFinish(best);
     if (wasPass && wasPass.from.team !== best.team) {
       game.stats[best.team].steals++;
       banner('INTERCEPTED!', `${best.name} 抄截傳球！`, TEAMS[best.team].light, 1.1);
@@ -1064,6 +1124,7 @@
       if (p.jumpAt <= 0) { p.jumpAt = -1; jump(p, 4.4); }
     }
     if (p.state === 'dunk') { updateDunk(p, dt); return; }
+    if (p.alley) updateAlleyRunner(p, dt);
 
     const grounded = p.y <= 0 && p.vy <= 0;
     if (grounded && p.state === 'idle') {
@@ -1376,6 +1437,8 @@
     }
     // Space: crossover
     if (inp.hit('cross') && hasBall) crossover(p, ax);
+    // R: alley-oop
+    if (inp.hit('alley') && hasBall) alleyOop(p);
     // W: jump for rebounds and blocks
     if (inp.hit('jump') && !hasBall) jump(p, 4.5);
     if (inp.up('shoot')) {
@@ -2618,7 +2681,7 @@
     const online = game.online || !!net.role;
     const show = online ? 0 : game.playTime < 25 ? 1 : 0.45;
     ctx.globalAlpha = show;
-    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· D 投籃/灌籃 · S 花式灌籃/抄截 · A+S 遠距灌籃 · X 傳球/換人 · 空白 晃人 · '
+    const txt = '方向鍵 移動 · A/Shift 衝刺 · W 跳（籃板｜蓋帽）· D 投籃/灌籃 · S 花式灌籃/抄截 · A+S 遠距灌籃 · X 傳球/換人 · R 空中接力 · 空白 晃人 · '
       + (game.online || net.role ? 'Esc 離開對戰' : 'P 暫停') + ' · M 靜音';
     ctx.font = font(13, 600); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(txt).width + 24;
@@ -2676,8 +2739,8 @@
 
     ctx.font = font(13, 600); ctx.fillStyle = '#9fb0d0';
     const lines = input.touch
-      ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開投籃，籃下灌籃，防守時抄截', '跳躍鍵：籃板 / 蓋帽 · 傳球鍵：傳球 / 換人 · 晃人鍵 · 花式鍵：花式灌籃（開衝刺可從三分線起飛）· 衝刺鍵點一下開關']
-      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'D 投籃（按住，綠區放開）/ 灌籃 · S 花式灌籃 / 防守抄截 · A+S 三分線起飛灌籃 · X 傳球/換人 · 空白 晃人 · Enter 開始'];
+      ? ['左側搖桿移動（推到底自動衝刺）· 投籃鍵：按住放開投籃，籃下灌籃，防守時抄截', '跳躍鍵：籃板 / 蓋帽 · 傳球鍵：傳球 / 換人 · 晃人鍵 · 接力鍵：空中接力 · 花式鍵：花式灌籃（開衝刺可從三分線起飛）· 衝刺鍵點一下開關']
+      : ['方向鍵 移動 · A/Shift 衝刺 · W 跳（搶籃板 / 蓋火鍋）', 'D 投籃（按住，綠區放開）/ 灌籃 · S 花式灌籃 / 防守抄截 · A+S 三分線起飛灌籃 · X 傳球/換人 · R 空中接力 · 空白 晃人 · Enter 開始'];
     lines.forEach((l, i) => ctx.fillText(l, VW / 2, y + 540 + i * 20));
   }
 

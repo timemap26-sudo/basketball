@@ -40,7 +40,7 @@
   #btns [data-act=shoot]  { right: 0;    bottom: 0;    width: 104px; height: 104px; background: rgba(232,69,44,.45); }
   #btns [data-act=pass]   { right: 120px; bottom: 8px;  width: 80px;  height: 80px;  background: rgba(43,125,233,.45); }
   #btns [data-act=sprint] { right: 16px;  bottom: 122px; width: 72px;  height: 72px; }
-  #btns [data-act=switch] { right: 120px; bottom: 112px; width: 62px;  height: 62px; }
+  #btns [data-act=jump]   { right: 112px; bottom: 104px; width: 70px;  height: 70px; background: rgba(60,190,110,.45); }
   #btns [data-act=pause]  { right: 200px; bottom: 150px; width: 46px;  height: 46px; font-size: 13px; }
   #lobby {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -142,10 +142,10 @@
   <div id="stick"><div id="knob"></div></div>
   <div id="btns">
     <button data-act="pause">II</button>
-    <button data-act="switch">換人</button>
+    <button data-act="jump">跳<br><small>籃板 / 蓋帽</small></button>
     <button data-act="sprint">衝刺</button>
-    <button data-act="pass">傳球<br><small>抄截</small></button>
-    <button data-act="shoot">投籃<br><small>灌籃 / 蓋帽</small></button>
+    <button data-act="pass">傳球<br><small>換人</small></button>
+    <button data-act="shoot">投籃<br><small>灌籃 / 抄截</small></button>
   </div>
 </div>
 

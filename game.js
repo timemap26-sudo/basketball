@@ -439,7 +439,6 @@
   function giveTo(p, forceReset) {
     const wasShot = ball.shot;
     if (forceReset || p.team !== game.possession || ball.touchedRim) game.shotClock = 24;
-    for (const q of players) q.inbound = false;
     ball.holder = p; ball.state = 'held'; ball.pass = null; ball.shot = null;
     ball.touchedRim = false; ball.lastTeam = p.team; ball.ignore = null;
     game.possession = p.team;
@@ -465,20 +464,11 @@
     game.afterFn = fn;
   }
 
-  // inbounds are thrown in from just outside the line: the inbounder can't move or shoot, only pass (5 seconds max)
-  const INBOUND_MAX = 5;
   function doInbound(team, x, z) {
     const p = teams[team].slice().sort((a, b) => hyp(a.x - x, a.z - z) - hyp(b.x - x, b.z - z))[0];
-    if (x <= 0.5) x = -0.55;
-    else if (x >= COURT_L - 0.5) x = COURT_L + 0.55;
-    else if (z <= 0.5) z = -0.55;
-    else if (z >= COURT_W - 0.5) z = COURT_W + 0.55;
     p.x = x; p.z = z; p.y = 0; p.vy = 0; p.vx = p.vz = 0; p.state = 'idle'; p.dunk = null;
     p.lockT = 0.45; p.stunT = 0;
     giveTo(p, true);
-    p.inbound = true; p.inboundT = 0; p.inboundWait = rand(0.7, 1.4);
-    p.facing = x < 0 ? 1 : x > COURT_L ? -1 : Math.sign(MID_X - x) || p.facing;
-    if (isHuman(p)) floatText('發球！按 X 傳球', p.x, p.height + 0.9, p.z, '#ffd54a', 18);
     game.phase = 'live';
   }
 
@@ -674,7 +664,6 @@
 
   function passTo(p, r) {
     if (ball.holder !== p || !r || p.state !== 'idle') return;
-    p.inbound = false;
     const sx = p.x + p.facing * 0.3, sy = 1.35, sz = p.z;
     let t = 0.3;
     for (let i = 0; i < 3; i++) {
@@ -722,7 +711,7 @@
     if (p.stealCD > 0 || p.y > 0 || p.state !== 'idle') return;
     p.stealCD = 0.75; p.reachT = 0.25;
     const h = ball.holder;
-    if (!h || h.team === p.team || h.state !== 'idle' || h.crossT > 0 || h.inbound) return;
+    if (!h || h.team === p.team || h.state !== 'idle' || h.crossT > 0) return;
     const d = hyp(h.x - p.x, h.z - p.z);
     if (d > 1.3) return;
     p.facing = Math.sign(h.x - p.x) || p.facing;
@@ -863,15 +852,6 @@
         } else { endPeriod(); return; }
       }
     }
-    const ib = ball.holder && ball.holder.inbound ? ball.holder : null;
-    if (ib) {
-      ib.inboundT += dt;
-      if (ib.inboundT > INBOUND_MAX) {
-        ib.inbound = false;
-        turnover(1 - ib.team, ib.x, ib.z, '5 秒違例！', `${TEAMS[1 - ib.team].name}隊球權`);
-      }
-      return; // the shot clock starts once the ball is in play
-    }
     if (game.possession >= 0 && !ball.shot && game.clock > 0) {
       game.shotClock -= dt;
       if (game.shotClock <= 0) {
@@ -983,11 +963,6 @@
       ball.y = p.y + p.height * ay + (HOOP_Y + 0.15 - (p.y + p.height * ay)) * w;
       ball.z = p.z + 0.08 + (hp.z - (p.z + 0.08)) * w;
     } else {
-      if (p.inbound) {
-        ball.x = p.x + f * 0.3; ball.y = p.height * 0.75; ball.z = p.z + 0.1;
-        ball.vx = ball.vz = ball.vy = 0;
-        return;
-      }
       // dribble
       const spd = hyp(p.vx, p.vz);
       p.dribble += dt * (7 + spd * 0.9);
@@ -1012,7 +987,7 @@
     if (ball.state === 'held') {
       positionHeldBall(dt);
       const h = ball.holder;
-      if (game.phase === 'live' && h.y <= 0 && h.state === 'idle' && h.lockT <= 0 && !h.inbound &&
+      if (game.phase === 'live' && h.y <= 0 && h.state === 'idle' && h.lockT <= 0 &&
           (h.x < 0 || h.x > COURT_L || h.z < 0 || h.z > COURT_W)) {
         outOfBounds(h.team, h.x, h.z);
       }
@@ -1093,7 +1068,7 @@
     const grounded = p.y <= 0 && p.vy <= 0;
     if (grounded && p.state === 'idle') {
       let wx = p.wantVx, wz = p.wantVz;
-      if (p.lockT > 0 || p.inbound) { wx = 0; wz = 0; }
+      if (p.lockT > 0) { wx = 0; wz = 0; }
       if (p.stunT > 0) { wx *= 0.3; wz *= 0.3; }
       if (p.crossT > 0) { wx = p.vx; wz = p.vz; } // ride out the crossover burst
       const a = 32 * dt;
@@ -1348,15 +1323,6 @@
     if (p.state !== 'idle' || p.y > 0) return;
     if (game.phase === 'jump' || game.phase === 'break') { p.wantVx = p.wantVz = 0; return; }
     const h = ball.holder;
-    if (h === p && p.inbound) {
-      p.wantVx = p.wantVz = 0;
-      if (p.inboundT > p.inboundWait && game.phase === 'live') {
-        const mates = teams[p.team].filter((q) => q !== p);
-        const r = pickPassTarget(p, 0, 0) || mates.sort((a, b) => hyp(a.x - p.x, a.z - p.z) - hyp(b.x - p.x, b.z - p.z))[0];
-        passTo(p, r);
-      }
-      return;
-    }
     if (h === p) return aiHolder(p, dt);
     if (ball.state === 'free' && game.phase === 'live') {
       if (ball.pass && ball.pass.to === p) {
@@ -1390,12 +1356,6 @@
       return;
     }
     if (game.phase === 'break') { p.wantVx = p.wantVz = 0; return; }
-    // inbounding: pass only (R)
-    if (hasBall && p.inbound) {
-      p.wantVx = p.wantVz = 0;
-      if (inp.hit('pass') && p.state === 'idle') passTo(p, pickPassTarget(p, ax.x, ax.z));
-      return;
-    }
 
     // D: shoot / dunk with the ball, steal on defence
     if (inp.hit('shoot')) {

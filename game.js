@@ -173,7 +173,7 @@
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     KeyA: 'sprint', ShiftLeft: 'sprint', ShiftRight: 'sprint',
     KeyW: 'jump', KeyD: 'shoot', KeyS: 'fancy', KeyX: 'pass', KeyR: 'alley', Space: 'cross',
-    KeyP: 'pause', Escape: 'pause', Enter: 'start', KeyM: 'mute',
+    KeyP: 'pause', Escape: 'pause', Enter: 'start', KeyM: 'mute', KeyQ: 'quit',
   };
   const input = {
     down: new Set(), pressed: new Set(), released: new Set(),
@@ -248,6 +248,56 @@
   }
   window.addEventListener('touchstart', enableTouch, { passive: true });
   if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) enableTouch();
+
+  // iPad / iPhone Safari ignores user-scalable=no: two thumbs on the stick and a button read as a
+  // pinch, and tapping a button twice quickly reads as a double-tap, so the page zooms in and the
+  // controls end up off screen. Block those gestures; if the page still gets zoomed, snap it back
+  // and keep the controls pinned to what is actually visible.
+  const editable = (t) => !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA');
+  for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) {
+    document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+  }
+  document.addEventListener('touchmove', (e) => {
+    if (e.touches.length > 1 || !editable(e.target)) e.preventDefault(); // nothing on the page scrolls
+  }, { passive: false });
+  let lastTouchEnd = 0;
+  document.addEventListener('touchend', (e) => {
+    const now = performance.now();
+    if (now - lastTouchEnd < 400 && !editable(e.target)) {
+      e.preventDefault(); // stops the double-tap zoom, but also the click: send that ourselves
+      const b = e.target.closest && e.target.closest('#lobby button, #chat button');
+      if (b) b.click();
+    }
+    lastTouchEnd = now;
+    if (!e.touches.length) setTimeout(unzoom, 60);
+  }, { passive: false });
+  const vv = window.visualViewport;
+  const vpMeta = document.querySelector('meta[name=viewport]');
+  const VP = vpMeta ? vpMeta.content : '';
+  let unzoomAt = -1e9, unzoomFlip = false;
+  function unzoom() {
+    if (!vv || !vpMeta || vv.scale < 1.02 || editable(document.activeElement)) return;
+    const now = performance.now();
+    if (now - unzoomAt < 600) return;
+    unzoomAt = now;
+    // changing the viewport tag makes iOS re-apply maximum-scale=1 and zoom back out
+    unzoomFlip = !unzoomFlip;
+    vpMeta.content = unzoomFlip ? VP + ',minimum-scale=1' : VP;
+  }
+  function pinTouchUI() {
+    const z = vv ? vv.scale : 1;
+    if (Math.abs(z - 1) < 0.01) { touchEl.style.cssText = ''; return; }
+    // fixed elements stay on the zoomed layout: move the controls onto the visible part, at normal size
+    touchEl.style.cssText = `inset:auto;left:${vv.offsetLeft}px;top:${vv.offsetTop}px;` +
+      `width:${vv.width * z}px;height:${vv.height * z}px;transform:scale(${1 / z});transform-origin:0 0`;
+  }
+  if (vv) {
+    vv.addEventListener('resize', pinTouchUI);
+    vv.addEventListener('scroll', pinTouchUI);
+  }
+  window.addEventListener('focusout', () => setTimeout(unzoom, 300));
+  window.addEventListener('orientationchange', () => setTimeout(unzoom, 300));
+
   let stickId = null;
   function stickMove(e) {
     const r = stickEl.getBoundingClientRect();
@@ -257,7 +307,8 @@
     if (m > 1) { dx /= m; dy /= m; }
     input.stick.x = Math.abs(dx) < 0.15 ? 0 : dx;
     input.stick.y = Math.abs(dy) < 0.15 ? 0 : dy;
-    knobEl.style.transform = `translate(${dx * R * 0.6}px, ${dy * R * 0.6}px)`;
+    const kr = stickEl.offsetWidth / 2; // unscaled radius, in case the controls are pinned while zoomed
+    knobEl.style.transform = `translate(${dx * kr * 0.6}px, ${dy * kr * 0.6}px)`;
     knobEl.classList.toggle('fast', hyp(dx, dy) > STICK_SPRINT);
   }
   stickEl.addEventListener('pointerdown', (e) => {
@@ -1556,6 +1607,16 @@
     newGame(false);
     input.endFrame();
   }
+  // pause menu: end this game early and go back to the main menu
+  function quitToMenu() {
+    for (const a of [...input.down]) input.release(a);
+    input.sprintToggle = false;
+    const sb = document.querySelector('[data-act=sprint]');
+    if (sb) sb.classList.remove('on');
+    menuButtons.length = 0;
+    newGame(true);
+    input.endFrame();
+  }
 
   // =====================================================================
   // Network (online 1v1 over WebRTC via PeerJS)
@@ -2086,6 +2147,9 @@
     } else if (game.mode === 'over') {
       if (!game.online && !net.role) newGame(true);
     } else if (game.mode === 'paused') {
+      for (const b of menuButtons) {
+        if (vx >= b.x && vx <= b.x + b.w && vy >= b.y && vy <= b.y + b.h) { sfx.click(); b.fn(); return; }
+      }
       game.mode = 'play';
     }
   });
@@ -2885,12 +2949,15 @@
   }
 
   function drawPause() {
+    menuButtons.length = 0;
     ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, VW, VH);
-    panel(VW / 2 - 220, 240, 440, 170);
+    panel(VW / 2 - 220, 210, 440, 270);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = font(44, 900); ctx.fillStyle = '#fff'; ctx.fillText('暫停', VW / 2, 300);
-    ctx.font = font(16, 600); ctx.fillStyle = '#9fb0d0';
-    ctx.fillText('按 P / Esc / 點擊畫面 繼續', VW / 2, 360);
+    ctx.font = font(44, 900); ctx.fillStyle = '#fff'; ctx.fillText('暫停', VW / 2, 262);
+    button('繼續比賽', VW / 2 - 150, 304, 300, 54, true, () => { game.mode = 'play'; });
+    button('結束比賽，回主選單', VW / 2 - 150, 370, 300, 54, false, quitToMenu);
+    ctx.font = font(14, 600); ctx.fillStyle = '#9fb0d0'; ctx.textAlign = 'center';
+    ctx.fillText(input.touch ? '點按鈕選擇 · 再按 II 繼續' : 'P / Esc / Enter 繼續 · Q 結束比賽回主選單', VW / 2, 452);
   }
 
   function drawGameOver() {
@@ -2962,7 +3029,8 @@
         else if (window.confirm('離開連線對戰？')) leaveToMenu();
       } else simulate(dt);
     } else if (game.mode === 'paused') {
-      if (input.hit('pause') || input.hit('start')) game.mode = 'play';
+      if (input.hit('quit')) { sfx.click(); quitToMenu(); }
+      else if (input.hit('pause') || input.hit('start')) game.mode = 'play';
     } else if (game.mode === 'over') {
       if (game.online && net.role === 'host') {
         if (input.hit('start')) startOnline('host');
